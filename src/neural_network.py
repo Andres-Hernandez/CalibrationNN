@@ -34,13 +34,14 @@ test_size = 0.2
 total_size = 1.0
 n_jobs = 2
 
-class LogTransformer(BaseEstimator, TransformerMixin):
-    def __init__(self, func=None, validate=True,
+class FunctionTransformerWithInverse(BaseEstimator, TransformerMixin):
+    def __init__(self, func=None, inv_func=None, validate=True,
                  accept_sparse=False, pass_y=False):
-        self.func = func
         self.validate = validate
         self.accept_sparse = accept_sparse
         self.pass_y = pass_y
+        self.func = func
+        self.inv_func = inv_func
         
     def fit(self, X, y=None):
         if self.validate:
@@ -49,16 +50,20 @@ class LogTransformer(BaseEstimator, TransformerMixin):
 
     def transform(self, X, y=None):
         if self.validate:
-            X = check_array(X, self.accept_sparse)            
-        return np.log(X)
+            X = check_array(X, self.accept_sparse)
+        if self.func is None:
+            return X
+        return self.func(X)
         
     def inverse_transform(self, X, y=None):
         if self.validate:
             X = check_array(X, self.accept_sparse)            
-        return np.exp(X)
+        if self.inv_func is None:
+            return X
+        return self.inv_func(X)
 
 
-def retrieve_trainingset(file_name, force_positive = True):
+def retrieve_trainingset(file_name, transform=True, func=None, inv_func=None):
     #To make it reproducible    
     np.random.seed(seed)
     
@@ -102,12 +107,15 @@ def retrieve_trainingset(file_name, force_positive = True):
         x_ir_test = x_ir[index[train_sample+valid_sample:train_sample+valid_sample+test_sample]]
         y_test = y[index[train_sample+valid_sample:train_sample+valid_sample+test_sample]]    
     
-    if force_positive:
-        #As the parameters need to be positive, transform them first 
-        #with a logarithm, and then scale them
-        logTrm = LogTransformer()
-        scaler = StandardScaler()
-        pipeline = Pipeline([('log', logTrm), ('scaler', scaler)])
+    if transform:
+        if func is not None or inv_func is not None:
+            funcTrm = FunctionTransformerWithInverse(func=func, 
+                                                     inv_func=inv_func)
+            scaler = StandardScaler()
+            pipeline = Pipeline([('funcTrm', funcTrm), ('scaler', scaler)])
+        else:
+            pipeline = StandardScaler()
+
         y_train = pipeline.fit_transform(y_train)
         y_valid = pipeline.transform(y_valid)
         if y_test is not None:
@@ -126,13 +134,96 @@ def retrieve_trainingset(file_name, force_positive = True):
             'y_test': y_test,
             'transform': pipeline}
             
+class PredictiveModel(object):
+    def __init__(self, model_dict, preprocessing=None, prefix='', postfix=''):
+        self.model_name = model_dict['name']
+        if model_dict.has_key('transformation'):
+            self._func = model_dict['transformation']
+        else:            
+            self._func = None
+        
+        if model_dict.has_key('inverse_transformation'):
+            self._inv_func = model_dict['inverse_transformation']
+        else:            
+            self._inv_func = None        
+        
+        self.name = prefix + self.model_name
+        self.postfix = postfix
+        self._data = self.__get_data()
+        self.x_train = None
+        self.x_valid = None
+        self.x_test = None
+        self.y_train = None
+        self.y_valid = None
+        self.y_test = None
+        self.model = None
+        self.history = None
+        self._transform = self._data['transform']
+        self._preprocessing = preprocessing
+
+    def __get_data(self):
+        # File name is h5_model_node + _ + risk factor + '_' + self.name
+        file_name = inst.flatten_name(self.name)
+        file_name = file_name.lower().replace('/', '_')
+        return retrieve_trainingset(file_name, True, self._func, self._inv_func)
+
+    def file_name(self):
+        # File name is self.name + _nn
+        file_name = inst.proper_name(self.name) + '_nn' + self.postfix
+        file_name = file_name.lower().replace('/', '_')
+        return du.data_dir + file_name
+
+    def __tofile(self):
+        pass
+    
+    def __fromfile(self):
+        pass
+
+    def __getstate__(self):
+        pass
+
+    def __setstate__(self, d):
+        pass
+
+    def train(self, nb_epochs):
+        self.y_train = self._data['y_train']
+        self.y_valid = self._data['y_valid']
+        self.y_test = self._data['y_test']
+
+    def fit(self, nb_epochs):
+        if self.model is None:
+            raise RuntimeError('Model not yet instantiated')
+
+    def test(self, batch_size=16):
+        pass
+
+    def predict(self, data):
+        if self.model is None:
+            raise RuntimeError('Model not yet instantiated')
+        if self._preprocessing is not None:
+            data = self._preprocessing(data)
+        y = self.model.predict(data)
+        if self._transform is not None:
+            y = self._transform.inverse_transform(y)
+        return y
+            
             
 class NeuralNetwork(object):
-    def __init__(self, model_name, model_callback, preprocessing=None,
+    def __init__(self, model_dict, model_callback, preprocessing=None,
                  lr=0.001, loss='mean_squared_error', prefix='', postfix='',
                  method=Nadam):
-        self.model_name = model_name
-        self.name = prefix + model_name
+        self.model_name = model_dict['name']
+        if model_dict.has_key('transformation'):
+            self._func = model_dict['transformation']
+        else:            
+            self._func = None
+        
+        if model_dict.has_key('inverse_transformation'):
+            self._inv_func = model_dict['inverse_transformation']
+        else:            
+            self._inv_func = None        
+        
+        self.name = prefix + self.model_name
         self.postfix = postfix
         self._data = self.__get_data()
         self.x_train = None
@@ -154,7 +245,7 @@ class NeuralNetwork(object):
         # File name is h5_model_node + _ + risk factor + '_' + self.name
         file_name = inst.flatten_name(self.name)
         file_name = file_name.lower().replace('/', '_')
-        return retrieve_trainingset(file_name)
+        return retrieve_trainingset(file_name, True, self._func, self._inv_func)
 
     def file_name(self):
         # File name is self.name + _nn
@@ -400,61 +491,62 @@ hyper-parameters, or topologies
 def hullwhite_fnn(exponent=6, batch_size=16, lr=0.001, layers=3, 
                   loss='mean_squared_error', activation='tanh',  prefix='', 
                   postfix='', dropout=0.5, dropout_first=None, 
-                  dropout_middle=None, dropout_last=None, **kwargs):
+                  dropout_middle=None, dropout_last=None, model_dict=inst.hullwhite_analytic):
     hwfnn = partial(hullwhite_fnn_model, exponent=exponent, batch_size=batch_size, 
                     activation='tanh', layers=layers, dropout=dropout, 
                     dropout_first=dropout_first, dropout_middle=dropout_middle,
                     dropout_last=dropout_last)
-    model = NeuralNetwork(inst.hullwhite_analytic['name'], hwfnn,
-                          lr=lr, loss=loss, preprocessing=preprocessing_fnn,
+    model = NeuralNetwork(model_dict, hwfnn, lr=lr, loss=loss, 
+                          preprocessing=preprocessing_fnn, 
                           prefix=prefix, postfix=postfix)
     return model
 
 
-def hullwhite_rbf(exponent=6, reg=0.2, batch_size=16, lr=0.001, layers=1, 
+def hullwhite_rbf(exponent=6, batch_size=16, lr=0.001, layers=1, 
                   loss='mean_squared_error', postfix='', prefix='', dropout=0.5, 
                   dropout_first=None, dropout_middle=None, dropout_last=None, 
-                  **kwargs):
-    return hullwhite_fnn(exponent = exponent, reg = reg, batch_size = batch_size,
+                  model_dict=inst.hullwhite_analytic):
+    return hullwhite_fnn(exponent = exponent, batch_size = batch_size,
                          lr = lr, layers = layers, loss = loss, activation=rbf, 
                          prefix=prefix, postfix=postfix, dropout=dropout, 
                          dropout_first=dropout_first, dropout_middle=dropout_middle,
-                         dropout_last=dropout_last)
+                         dropout_last=dropout_last, model_dict=model_dict)
 
 
-def hullwhite_relu(exponent=6, reg=0.2, batch_size=16, lr=0.001, layers=1, 
+def hullwhite_relu(exponent=6, batch_size=16, lr=0.001, layers=1, 
                    loss='mean_squared_error', postfix='', prefix='', dropout=0.5, 
                    dropout_first=None, dropout_middle=None, dropout_last=None, 
-                   **kwargs):
-    return hullwhite_fnn(exponent=exponent, reg=reg, batch_size=batch_size, 
+                   model_dict=inst.hullwhite_analytic):
+    return hullwhite_fnn(exponent=exponent, batch_size=batch_size, 
                          lr=lr, layers=layers, loss=loss, activation='relu', 
                          prefix=prefix, postfix=postfix, dropout=dropout, 
                          dropout_first=dropout_first, dropout_middle=dropout_middle, 
-                         dropout_last=dropout_last)
+                         dropout_last=dropout_last, model_dict=model_dict)
 
 
-def hullwhite_elu(exponent=6, reg=0.2, batch_size=16, lr=0.001, layers=1, 
+def hullwhite_elu(exponent=6, batch_size=16, lr=0.001, layers=1, 
                   alpha=1.0, loss='mean_squared_error', postfix='', prefix='', 
                   dropout=0.5, dropout_first=None, dropout_middle=None, 
-                  dropout_last=None, **kwargs):
+                  dropout_last=None, model_dict=inst.hullwhite_analytic):
     elu = ELU(alpha)
-    return hullwhite_fnn(exponent=exponent, reg=reg, batch_size=batch_size,
+    return hullwhite_fnn(exponent=exponent, batch_size=batch_size,
                          lr=lr, layers=layers, loss=loss, activation=elu, 
                          prefix=prefix, postfix=postfix, dropout=dropout, 
                          dropout_first=dropout_first, dropout_middle=dropout_middle, 
-                         dropout_last=dropout_last)
+                         dropout_last=dropout_last, model_dict=model_dict)
                     
 
 def hullwhite_cnn(lr=0.001, exponent=8, dropout_conv=0.2, dropout_dense=0.5, 
                   batch_size=16, nb_filters_swo=64, nb_filters_ir=32,
                   nb_pool=2, nb_conv_swo=3, nb_conv_ir=3, nb_opts=13, 
-                  nb_swaps=12, loss='mean_squared_error', prefix='', postfix=''):
+                  nb_swaps=12, loss='mean_squared_error', prefix='', postfix='',
+                  model_dict=inst.hullwhite_analytic):
     hwcnn = partial(hullwhite_cnn_model, exponent = exponent, dropout_conv=dropout_conv, 
                     dropout_dense=dropout_dense, batch_size=batch_size, 
                     nb_filters_swo=nb_filters_swo, nb_filters_ir=nb_filters_ir, 
                     nb_pool=nb_pool, nb_conv_swo=nb_conv_swo, nb_conv_ir=nb_conv_ir,
                     nb_opts=nb_opts, nb_swaps=nb_swaps)
-    return NeuralNetwork(inst.hullwhite_analytic['name'], hwcnn,
+    return NeuralNetwork(model_dict, hwcnn,
                          lr=lr, loss=loss, preprocessing=lambda x: x,
                          prefix=prefix, postfix=postfix)
 
@@ -490,7 +582,7 @@ def test_helper(func, exponent, layer, lr, dropout_first, dropout_middle,
     val_loss = np.mean(model.history['history']['val_loss'][-5:])
 #    
 #    if with_comparison:
-#        swo = inst.getSwaptionGen(inst.hullwhite_analytic)
+#        swo = inst.get_swaptiongen(inst.hullwhite_analytic)
 #        _, values = swo.compare_history(model, dates=dates)
 #        
     

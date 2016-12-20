@@ -15,7 +15,8 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.externals import joblib
 
-data_dir = '../data/'
+data_dir = '../data_corr_mid_2014/'
+#data_dir = '../data/'
 h5file = data_dir + 'data.h5'
 h5_ts_node = 'TS'
 swo_gbp_tskey = h5_ts_node + '/SWO/GBP'

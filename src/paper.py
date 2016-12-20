@@ -40,7 +40,7 @@ def running_mean(x, N):
     return (cumsum[N:] - cumsum[:-N]) / N 
 
 def plot():
-    du.data_dir = '../data_corr_mid_2014/'
+    du.data_dir = '../data/'
     mark_read = 'adj_error_s'
     mark_write = 'adj_error_insample40_s'
     data_labels = ('Default Starting Point', 'Historical Starting Point', 'Feed-forward Neural Net')
@@ -144,7 +144,7 @@ def plot2():
 
 
 def plot4():
-    swo = inst.getSwaptionGen(inst.hullwhite_analytic)
+    swo = inst.get_swaptiongen(inst.hullwhite_analytic)
     df = pd.get_store(du.h5file)[swo.key_model]
     d1 = df.loc['2015-06-01']
     d2 = df.loc['2015-06-02']
@@ -184,7 +184,7 @@ def plot4():
     return (X, Y, Z)
 
 #model = nn.read_model('../data/swo_gbp_hull_white_analytic_formulae_nn_s140000.p')
-#swo = inst.getSwaptionGen(inst.hullwhite_analytic)
+#swo = inst.get_swaptiongen(inst.hullwhite_analytic)
 #orig_errors, errors = swo.errors(model, '2013-01-01')
 #    
 #orig_errors = orig_errors.reshape(12, 13)

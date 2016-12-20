@@ -16,6 +16,8 @@ from sklearn.covariance import empirical_covariance
 from scipy.linalg import sqrtm
 import matplotlib.pyplot as plt
 
+seed = 1027
+
 h5_model_node = 'Models'
 h5_error_node = 'Errors'
 # Interest Rate Curve hdf5 node
@@ -98,6 +100,7 @@ def proper_name(name):
     name = name.replace(")", "")
     name = name.replace(",", "_")
     name = name.replace("-", "_")
+    name = name.replace("+", "p")
     return name
 
 def flatten_name(name, node=h5_model_node, risk_factor='IR'):
@@ -170,9 +173,15 @@ class SwaptionGen (du.TimeSeriesData):
         self.__create_helpers()
 
         #Standard calibration nick-nacks
-        self.method = ql.LevenbergMarquardt()
-        self.endCriteria = ql.EndCriteria(1000, 250, 1e-7, 1e-7, 1e-7)
-        self.constraint = ql.PositiveConstraint()
+        if self._model_dict.has_key('method'):
+            self.method = self._model_dict['method'][0]
+            self.end_criteria = self._model_dict['method'][1]
+            self.constraint = self._model_dict['method'][2]
+        else:
+            self.method = ql.LevenbergMarquardt()
+            self.end_criteria = ql.EndCriteria(1000, 250, 1e-7, 1e-7, 1e-7)
+            self.constraint = ql.PositiveConstraint()
+            
         self._defaultParams = self.model.params()        
 
         #Output transformations
@@ -190,6 +199,7 @@ class SwaptionGen (du.TimeSeriesData):
         self.okFormat = '%12s |%12s |%12s |%12s |%12s'
         self.errFormat = '%2s |%12s |'
         self.values = None
+        self.history_part = 0.4
 
 
     def set_date(self, date):
@@ -242,7 +252,8 @@ class SwaptionGen (du.TimeSeriesData):
                 raise RuntimeError("Invalid input")
             clean = False
             start = args[0]
-            end = args[1]
+            if args[1] > 0:
+                end = args[1]                
 
         prev_params = self._defaultParams
         nb_params = len(prev_params)
@@ -339,7 +350,7 @@ class SwaptionGen (du.TimeSeriesData):
         self.set_date(date)
         try:
             self.model.calibrate(self.helpers, self.method, 
-                                 self.endCriteria, self.constraint)
+                                 self.end_criteria, self.constraint)
                                  
             params = self.model.params()
             origObjective = self.model.value(params, self.helpers)
@@ -362,7 +373,7 @@ class SwaptionGen (du.TimeSeriesData):
             #Recalibrate using optimized parameters
             try:
                 self.model.calibrate(self.helpers, self.method, 
-                                     self.endCriteria, self.constraint)
+                                     self.end_criteria, self.constraint)
                 optimEvals = self.model.functionEvaluation()
             except RuntimeError as e:
                 optimEvals = -1
@@ -373,7 +384,7 @@ class SwaptionGen (du.TimeSeriesData):
                 histObjectivePrior = self.model.value(self.model.params(), self.helpers)
                 histMeanErrorPrior, _ = self.__errors()
                 self.model.calibrate(self.helpers, self.method, 
-                                     self.endCriteria, self.constraint)
+                                     self.end_criteria, self.constraint)
                 histObjective = self.model.value(self.model.params(), self.helpers)
                 histMeanError, _ = self.__errors()
             except RuntimeError:
@@ -398,13 +409,20 @@ class SwaptionGen (du.TimeSeriesData):
         #Correlated IR, Model parameters, and errors
     
         #Take only first 40% of history
-        dates = self._dates[:len(self._dates)*0.4]    
+        dates = self._dates[:len(self._dates)*self.history_part]    
     
         #Get history of parameters
         nb_swo_params = len(self._defaultParams)
-        columns = map(lambda x: 'OrigParam' + str(x), range(nb_swo_params))
+        columns_orig = map(lambda x: 'OrigParam' + str(x), range(nb_swo_params))
+        columns_hist = map(lambda x: 'HistParam' + str(x), range(nb_swo_params))
         df_model = pd.get_store(du.h5file)[self.key_model]
-        swo_param_history = df_model.loc[dates][columns]
+        #Pick the best of the two
+        orig_vs_hist = df_model.OrigObjective.values < df_model.HistObjective.values
+        swo_param_history_orig = df_model.loc[dates][columns_orig]
+        swo_param_history_hist = df_model.loc[dates][columns_hist]
+        orig_vs_hist = df_model.loc[dates]['OrigObjective'].values < df_model.loc[dates]['HistObjective'].values
+        swo_param_history = swo_param_history_orig.copy(deep=True)
+        swo_param_history[~orig_vs_hist] = swo_param_history_hist[~orig_vs_hist]
         
         #Get history of errors
         nb_instruments = len(self.helpers)
@@ -630,21 +648,64 @@ It requires 3 parameters:
 Optional parameters:
     transformation: a preprocessing function
     inverse_transformation: a postprocessing function
+    method: an optimization object
 '''
 hullwhite_analytic = {'name' : 'Hull-White (analytic formulae)',
                      'model' : ql.HullWhite, 
                      'engine' : ql.JamshidianSwaptionEngine,
                      'transformation' : np.log, 
                      'inverse_transformation' : np.exp}
-        
-def getSwaptionGen(modelMap):
+
+def g2_transformation(x):
+    if isinstance(x, pd.DataFrame):
+        x = x.values
+    y = np.zeros_like(x)
+    y[:, :-1] = np.log(x[:, :-1])
+    y[:, -1] = x[:, -1]
+    return y
+
+def g2_inverse_transformation(x):
+    y = np.zeros_like(x)
+    y[:, :-1] = np.exp(x[:, :-1])
+    y[:, -1] = np.clip(x[:, -1], -1.0, +1.0)
+    return y
+
+def g2_method():
+    n = 5
+    lower = ql.Array(n, 1e-9);
+    upper = ql.Array(n, 1.0);
+    lower[n-1] = -1.0;
+    upper[n-1] = 1.0;
+    constraint = ql.NonhomogeneousBoundaryConstraint(lower, upper);
+
+    maxSteps = 5000;
+    staticSteps = 600;
+    initialTemp = 50.0;
+    finalTemp = 0.001;
+    sampler = ql.SamplerMirrorGaussian(lower, upper, seed);
+    probability = ql.ProbabilityBoltzmannDownhill(seed);
+    temperature = ql.TemperatureExponential(initialTemp, n);
+    method = ql.MirrorGaussianSimulatedAnnealing(sampler, probability, temperature, 
+                                                 ql.ReannealingTrivial(),
+                                                 initialTemp, finalTemp)
+    criteria = ql.EndCriteria(maxSteps, staticSteps, 1.0e-8, 1.0e-8, 1.0e-8);
+    return (method, criteria, constraint)
+
+g2 = {'name' : 'G2++',
+      'model' : ql.G2, 
+      'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
+      'transformation' : g2_transformation,
+      'inverse_transformation' : g2_inverse_transformation,
+      'method': g2_method()}
+       
+def get_swaptiongen(modelMap):
     index = ql.GBPLibor(ql.Period(6, ql.Months))
     swo = SwaptionGen(index, modelMap)
     return swo
 
 
 def calibrate_history(model_dict, *args):
-    swo = getSwaptionGen(model_dict)
+    swo = get_swaptiongen(model_dict)
     swo.calibrate_history(*args)    
     return swo
 
