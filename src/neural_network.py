@@ -16,9 +16,9 @@ import instruments as inst
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils import check_array
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import Pipeline
-from keras.models import Sequential
+from keras.models import Sequential, Model
 from keras.layers.core import Dense, Dropout, Activation, Merge, Flatten
 #from keras.regularizers import l2
 from keras.layers.convolutional import Convolution2D, MaxPooling2D
@@ -26,7 +26,11 @@ from keras.layers.advanced_activations import ELU
 from keras.optimizers import Nadam
 from keras.models import model_from_json
 from keras.callbacks import EarlyStopping
+from keras.callbacks import ReduceLROnPlateau
+from keras.layers import BatchNormalization, Input, merge
 from keras import backend as K
+from copy import copy
+
 
 seed = 1027
 valid_size = 0.2
@@ -67,13 +71,13 @@ def retrieve_trainingset(file_name, transform=True, func=None, inv_func=None):
     #To make it reproducible    
     np.random.seed(seed)
     
-    file_name = du.data_dir + file_name
     x_swo = np.load(file_name + '_x_swo.npy')
     x_ir = np.load(file_name + '_x_ir.npy')
     y = np.load(file_name + '_y.npy')
     
     train_size = total_size - valid_size - test_size
     total_sample = y.shape[0]
+    print 'Total sample:%s', total_sample    
     train_sample = int(round(total_sample*train_size))
     valid_sample = int(round(total_sample*valid_size))
     test_sample = int(round(total_sample*test_size))
@@ -111,16 +115,19 @@ def retrieve_trainingset(file_name, transform=True, func=None, inv_func=None):
         if func is not None or inv_func is not None:
             funcTrm = FunctionTransformerWithInverse(func=func, 
                                                      inv_func=inv_func)
-            scaler = StandardScaler()
+            #scaler = StandardScaler()
+            scaler = MinMaxScaler()
             pipeline = Pipeline([('funcTrm', funcTrm), ('scaler', scaler)])
         else:
-            pipeline = StandardScaler()
+            #pipeline = StandardScaler()
+            pipeline = MinMaxScaler()
 
         y_train = pipeline.fit_transform(y_train)
         y_valid = pipeline.transform(y_valid)
         if y_test is not None:
             y_test = pipeline.transform(y_test)
     else:
+        print 'No transform requested'
         pipeline = None
     
     return {'x_swo_train': x_swo_train,
@@ -133,85 +140,25 @@ def retrieve_trainingset(file_name, transform=True, func=None, inv_func=None):
             'x_ir_test': x_ir_test,
             'y_test': y_test,
             'transform': pipeline}
+
+
+def proper_name(name):
+    name = name.replace(" ", "_")
+    name = name.replace("(", "")
+    name = name.replace(")", "")
+    name = name.replace(",", "_")
+    name = name.replace("-", "_")
+    name = name.replace("+", "p")
+    return name
             
-class PredictiveModel(object):
-    def __init__(self, model_dict, preprocessing=None, prefix='', postfix=''):
-        self.model_name = model_dict['name']
-        if model_dict.has_key('transformation'):
-            self._func = model_dict['transformation']
-        else:            
-            self._func = None
-        
-        if model_dict.has_key('inverse_transformation'):
-            self._inv_func = model_dict['inverse_transformation']
-        else:            
-            self._inv_func = None        
-        
-        self.name = prefix + self.model_name
-        self.postfix = postfix
-        self._data = self.__get_data()
-        self.x_train = None
-        self.x_valid = None
-        self.x_test = None
-        self.y_train = None
-        self.y_valid = None
-        self.y_test = None
-        self.model = None
-        self.history = None
-        self._transform = self._data['transform']
-        self._preprocessing = preprocessing
-
-    def __get_data(self):
-        # File name is h5_model_node + _ + risk factor + '_' + self.name
-        file_name = inst.flatten_name(self.name)
-        file_name = file_name.lower().replace('/', '_')
-        return retrieve_trainingset(file_name, True, self._func, self._inv_func)
-
-    def file_name(self):
-        # File name is self.name + _nn
-        file_name = inst.proper_name(self.name) + '_nn' + self.postfix
-        file_name = file_name.lower().replace('/', '_')
-        return du.data_dir + file_name
-
-    def __tofile(self):
-        pass
-    
-    def __fromfile(self):
-        pass
-
-    def __getstate__(self):
-        pass
-
-    def __setstate__(self, d):
-        pass
-
-    def train(self, nb_epochs):
-        self.y_train = self._data['y_train']
-        self.y_valid = self._data['y_valid']
-        self.y_test = self._data['y_test']
-
-    def fit(self, nb_epochs):
-        if self.model is None:
-            raise RuntimeError('Model not yet instantiated')
-
-    def test(self, batch_size=16):
-        pass
-
-    def predict(self, data):
-        if self.model is None:
-            raise RuntimeError('Model not yet instantiated')
-        if self._preprocessing is not None:
-            data = self._preprocessing(data)
-        y = self.model.predict(data)
-        if self._transform is not None:
-            y = self._transform.inverse_transform(y)
-        return y
-            
+def flatten_name(name, node='Models', risk_factor='IR'):
+    name = proper_name(name)
+    return node + '/' + risk_factor + '/' + name
             
 class NeuralNetwork(object):
     def __init__(self, model_dict, model_callback, preprocessing=None,
                  lr=0.001, loss='mean_squared_error', prefix='', postfix='',
-                 method=Nadam):
+                 method=Nadam, train_file=None, do_transform=True):
         self.model_name = model_dict['name']
         if model_dict.has_key('transformation'):
             self._func = model_dict['transformation']
@@ -225,6 +172,15 @@ class NeuralNetwork(object):
         
         self.name = prefix + self.model_name
         self.postfix = postfix
+		
+		if train_file is not None:
+			self.train_file_name = train_file
+		else:
+			self.train_file_name = flatten_name(self.name)
+			self.train_file_name = self.train_file_name.lower().replace('/', '_')
+			self.train_file_name = du.data_dir + self.train_file_name
+		
+        self.do_transform = do_transform
         self._data = self.__get_data()
         self.x_train = None
         self.x_valid = None
@@ -243,13 +199,12 @@ class NeuralNetwork(object):
 
     def __get_data(self):
         # File name is h5_model_node + _ + risk factor + '_' + self.name
-        file_name = inst.flatten_name(self.name)
-        file_name = file_name.lower().replace('/', '_')
-        return retrieve_trainingset(file_name, True, self._func, self._inv_func)
+        return retrieve_trainingset(self.train_file_name, self.do_transform, self._func, self._inv_func)
+        #return retrieve_trainingset(self.train_file_name, True, self._func, self._inv_func)
 
     def file_name(self):
         # File name is self.name + _nn
-        file_name = inst.proper_name(self.name) + '_nn' + self.postfix
+        file_name = proper_name(self.name) + '_nn' + self.postfix
         file_name = file_name.lower().replace('/', '_')
         return du.data_dir + file_name
 
@@ -339,10 +294,17 @@ class NeuralNetwork(object):
         return y
 
 
+def logarithmic_mean_squared_error(y_true, y_pred):
+    return -K.mean(K.log(1.-K.clip(K.square(y_pred-y_true),0., 1.-K.epsilon())))
+
+#_paper
 def hullwhite_fnn_model(data, method, loss, exponent=6, nb_epochs=0, 
                         batch_size=16, activation='tanh', layers=4, 
                         init='he_normal', dropout=0.5, dropout_first=None, 
-                        dropout_middle=None, dropout_last=None):
+                        dropout_middle=None, dropout_last=None,
+                        earlyStopPatience=125, reduceLRPatience=40,
+                        reduceLRFactor=0.5, reduceLRMinLR=0.000009,
+                        residual_cells=1):
     x_swo_train = data['x_swo_train']
     x_swo_valid = data['x_swo_valid']
     x_swo_test = data['x_swo_test']
@@ -365,27 +327,72 @@ def hullwhite_fnn_model(data, method, loss, exponent=6, nb_epochs=0,
         dropout_middle = dropout_first
     if dropout_last is None:
         dropout_last = dropout_middle
+        
+    assert residual_cells >= 0
     
-    print 'Exp:%s, Layer:%s, df:%s, dm:%s, dl:%s' % (exponent, layers, dropout_first, dropout_middle, dropout_last)
-    
-    nn = Sequential()
-    nn.add(Dense(2**exponent, input_dim=x_train.shape[1], 
-                 init=init))
-    nn.add(Activation(activation))
-    nn.add(Dropout(dropout_first))
-    for i in range(layers-1):
-        nn.add(Dense(2**exponent, init=init))
-        nn.add(Activation(activation))
-        nn.add(Dropout(dropout_middle))
-    nn.add(Dense(y_train.shape[1], init=init))
-    nn.add(Activation('linear'))
-    nn.add(Dropout(dropout_last))
+    if residual_cells == 0:
+        print 'Simple with no BN or residual'
+    else:
+        print 'Residual with BN (ex Out) - Activation before Dense - with %s residual cells' % residual_cells
+    print ' - Early Stop: Patience %s; Reduce LR Patience %s, Factor: %s, Min: %s' % \
+            (earlyStopPatience, reduceLRPatience, reduceLRFactor, reduceLRMinLR)
+    print ' - Exp:%s, Layer:%s, df:%s, dm:%s, dl:%s' % \
+            (exponent, layers, dropout_first, dropout_middle, dropout_last)
+    print ' - Loss:%s' % loss
+    #A copy of the activation layer needs to be used, instead of the layer
+    #directly because otherwise keras will not be able to load a saved configuration
+    #from a json file
+    act_idx = 1
+    inp = Input(shape=(x_train.shape[1],))
+    ly = BatchNormalization()(inp)
+    ly = Dense(2**exponent, init=init)(ly)
+    act = copy(activation)
+    act.name = act.name + "_" + str(act_idx)
+    act_idx = act_idx + 1
+    ly = act(ly)
+    ly = Dropout(dropout_first)(ly)
+    if residual_cells > 0:
+        for i in range(layers-1):
+            middle = BatchNormalization()(ly)
+            act = copy(activation)
+            act.name = act.name + "_" + str(act_idx)
+            act_idx = act_idx + 1
+            middle = act(middle)
+            middle = Dense(2**exponent, init=init)(middle)
+            middle = Dropout(dropout_middle)(middle)
+            for j in range(residual_cells-1):
+                act = copy(activation)
+                act.name = act.name + "_" + str(act_idx)
+                act_idx = act_idx + 1
+                middle = act(middle)
+                middle = Dense(2**exponent, init=init)(middle)
+                middle = Dropout(dropout_middle)(middle)
+            ly = merge([ly, middle], mode='sum')
+        ly = Dropout(dropout_last)(ly)
+    else:
+        for i in range(layers-1):
+            ly = Dense(2**exponent, init=init)(ly)
+            act = copy(activation)
+            act.name = act.name + "_" + str(act_idx)
+            act_idx = act_idx + 1
+            ly = act(ly)
+            ly = Dropout(dropout_middle)(ly)
+    ly = Dense(y_train.shape[1], init=init)(ly)
+    nn = Model(input=inp, output=ly)
     nn.compile(method, loss=loss)
     
     if nb_epochs > 0:
-        earlyStopping = EarlyStopping(monitor='val_loss', patience=75)
+        callbacks = []
+        if earlyStopPatience is not None:
+            earlyStopping = EarlyStopping(monitor='val_loss', patience=earlyStopPatience)
+            callbacks.append(earlyStopping)
+        if reduceLRFactor is not None:
+            reduceLR = ReduceLROnPlateau(monitor='val_loss', factor=reduceLRFactor,
+                                         patience=reduceLRPatience, min_lr=reduceLRMinLR, 
+                                         verbose=1)
+            callbacks.append(reduceLR)
         history2 = nn.fit(x_train, y_train, batch_size=batch_size, 
-                          nb_epoch=nb_epochs, verbose=2, callbacks=[earlyStopping],
+                          nb_epoch=nb_epochs, verbose=2, callbacks=callbacks,
                           validation_data=(x_valid, y_valid))
         history = {'history': history2.history,
                    'params': history2.params}
@@ -393,7 +400,7 @@ def hullwhite_fnn_model(data, method, loss, exponent=6, nb_epochs=0,
         history = {'history': [],
                    'params': []}
     return (x_train, x_valid, x_test, nn, history)
-
+		
 
 def hullwhite_cnn_model(data, method, loss, exponent=8, dropout_conv=0.2, 
                         dropout_dense=0.5, nb_epochs=0, batch_size=16, 
@@ -483,64 +490,89 @@ def preprocessing_fnn(x):
 def rbf(x):
     #This is not really a radial basis function, but it is similar
     return K.exp(-K.square(x))
-
+    
 '''
 Helper functions to instantiate neural networks with particular activations,
 hyper-parameters, or topologies
 '''
 def hullwhite_fnn(exponent=6, batch_size=16, lr=0.001, layers=3, 
-                  loss='mean_squared_error', activation='tanh',  prefix='', 
+                  loss='mean_squared_error', activation=Activation('tanh'),  prefix='', 
                   postfix='', dropout=0.5, dropout_first=None, 
-                  dropout_middle=None, dropout_last=None, model_dict=inst.hullwhite_analytic):
+                  dropout_middle=None, dropout_last=None, earlyStopPatience=125, 
+                  reduceLRPatience=40, reduceLRFactor=0.5, reduceLRMinLR=0.000009,
+                  model_dict=inst.g2, residual_cells=1, train_file=None,
+                  do_transform=True):
     hwfnn = partial(hullwhite_fnn_model, exponent=exponent, batch_size=batch_size, 
-                    activation='tanh', layers=layers, dropout=dropout, 
+                    activation=activation, layers=layers, dropout=dropout, 
                     dropout_first=dropout_first, dropout_middle=dropout_middle,
-                    dropout_last=dropout_last)
+                    dropout_last=dropout_last, earlyStopPatience=earlyStopPatience,
+                    reduceLRPatience=reduceLRPatience, reduceLRFactor=reduceLRFactor, 
+                    reduceLRMinLR=reduceLRMinLR, residual_cells=residual_cells)
     model = NeuralNetwork(model_dict, hwfnn, lr=lr, loss=loss, 
                           preprocessing=preprocessing_fnn, 
-                          prefix=prefix, postfix=postfix)
+                          prefix=prefix, postfix=postfix, train_file=train_file,
+                          do_transform=do_transform)
     return model
 
 
 def hullwhite_rbf(exponent=6, batch_size=16, lr=0.001, layers=1, 
                   loss='mean_squared_error', postfix='', prefix='', dropout=0.5, 
                   dropout_first=None, dropout_middle=None, dropout_last=None, 
-                  model_dict=inst.hullwhite_analytic):
+                  earlyStopPatience=125, reduceLRPatience=40, reduceLRFactor=0.5, 
+                  reduceLRMinLR=0.000009, model_dict=inst.g2, residual_cells=1, 
+				  train_file=None, do_transform=True):
     return hullwhite_fnn(exponent = exponent, batch_size = batch_size,
-                         lr = lr, layers = layers, loss = loss, activation=rbf, 
+                         lr = lr, layers = layers, loss = loss, activation=Activation(rbf), 
                          prefix=prefix, postfix=postfix, dropout=dropout, 
                          dropout_first=dropout_first, dropout_middle=dropout_middle,
-                         dropout_last=dropout_last, model_dict=model_dict)
+                         dropout_last=dropout_last, earlyStopPatience=earlyStopPatience,
+                         reduceLRPatience=reduceLRPatience, reduceLRFactor=reduceLRFactor, 
+                         reduceLRMinLR=reduceLRMinLR, model_dict=model_dict, 
+                         residual_cells=residual_cells, train_file=train_file,
+                         do_transform=do_transform)
 
 
 def hullwhite_relu(exponent=6, batch_size=16, lr=0.001, layers=1, 
                    loss='mean_squared_error', postfix='', prefix='', dropout=0.5, 
                    dropout_first=None, dropout_middle=None, dropout_last=None, 
-                   model_dict=inst.hullwhite_analytic):
+                   earlyStopPatience=125, reduceLRPatience=40, reduceLRFactor=0.5, 
+                   reduceLRMinLR=0.000009, model_dict=inst.g2, residual_cells=1, 
+				   train_file=None, do_transform=True):
     return hullwhite_fnn(exponent=exponent, batch_size=batch_size, 
-                         lr=lr, layers=layers, loss=loss, activation='relu', 
+                         lr=lr, layers=layers, loss=loss, activation=Activation('relu'), 
                          prefix=prefix, postfix=postfix, dropout=dropout, 
                          dropout_first=dropout_first, dropout_middle=dropout_middle, 
-                         dropout_last=dropout_last, model_dict=model_dict)
+                         dropout_last=dropout_last, earlyStopPatience=earlyStopPatience,
+                         reduceLRPatience=reduceLRPatience, reduceLRFactor=reduceLRFactor, 
+                         reduceLRMinLR=reduceLRMinLR, model_dict=model_dict, 
+                         residual_cells=residual_cells, train_file=train_file, 
+                         do_transform=do_transform)
 
 
 def hullwhite_elu(exponent=6, batch_size=16, lr=0.001, layers=1, 
                   alpha=1.0, loss='mean_squared_error', postfix='', prefix='', 
                   dropout=0.5, dropout_first=None, dropout_middle=None, 
-                  dropout_last=None, model_dict=inst.hullwhite_analytic):
+                  dropout_last=None, earlyStopPatience=125, reduceLRPatience=40, 
+                  reduceLRFactor=0.5, reduceLRMinLR=0.000009, model_dict=inst.g2,
+                  residual_cells=1, train_file=None, do_transform=True):
     elu = ELU(alpha)
     return hullwhite_fnn(exponent=exponent, batch_size=batch_size,
                          lr=lr, layers=layers, loss=loss, activation=elu, 
                          prefix=prefix, postfix=postfix, dropout=dropout, 
                          dropout_first=dropout_first, dropout_middle=dropout_middle, 
-                         dropout_last=dropout_last, model_dict=model_dict)
+                         dropout_last=dropout_last, earlyStopPatience=earlyStopPatience,
+                         reduceLRPatience=reduceLRPatience, 
+                         reduceLRFactor=reduceLRFactor, reduceLRMinLR=reduceLRMinLR,
+                         model_dict=model_dict, residual_cells=residual_cells,
+                         train_file=train_file, do_transform=do_transform)
                     
 
 def hullwhite_cnn(lr=0.001, exponent=8, dropout_conv=0.2, dropout_dense=0.5, 
                   batch_size=16, nb_filters_swo=64, nb_filters_ir=32,
                   nb_pool=2, nb_conv_swo=3, nb_conv_ir=3, nb_opts=13, 
                   nb_swaps=12, loss='mean_squared_error', prefix='', postfix='',
-                  model_dict=inst.hullwhite_analytic):
+                  earlyStopPatience=125, reduceLRPatience=40, reduceLRFactor=0.5, 
+                  reduceLRMinLR=0.000009, model_dict=inst.g2):
     hwcnn = partial(hullwhite_cnn_model, exponent = exponent, dropout_conv=dropout_conv, 
                     dropout_dense=dropout_dense, batch_size=batch_size, 
                     nb_filters_swo=nb_filters_swo, nb_filters_ir=nb_filters_ir, 
@@ -580,7 +612,7 @@ def test_helper(func, exponent, layer, lr, dropout_first, dropout_middle,
                  alpha=alpha)
     model.train(200)
     val_loss = np.mean(model.history['history']['val_loss'][-5:])
-#    
+    
 #    if with_comparison:
 #        swo = inst.get_swaptiongen(inst.hullwhite_analytic)
 #        _, values = swo.compare_history(model, dates=dates)

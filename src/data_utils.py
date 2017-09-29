@@ -15,8 +15,8 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.externals import joblib
 
-data_dir = '../data_corr_mid_2014/'
-#data_dir = '../data/'
+#data_dir = '../data_corr_mid_2014/'
+data_dir = '../data/'
 h5file = data_dir + 'data.h5'
 h5_ts_node = 'TS'
 swo_gbp_tskey = h5_ts_node + '/SWO/GBP'
@@ -168,7 +168,8 @@ def plot_data(times, data, labels=None, figsize=(10, 7.5), frame_lines=False,
               xlabel_color=almost_black, ylabel_color=almost_black,
               xlabel_fontsize=14, ylabel_fontsize=14, 
               xtick_fontsize=14, ytick_fontsize=14,
-              xtick_color=almost_black, ytick_color=almost_black):
+              xtick_color=almost_black, ytick_color=almost_black,
+              out_of_sample=None):
     # Taken from 
     # http://www.randalolson.com/2014/06/28/how-to-make-beautiful-data-visualizations-in-python-with-matplotlib/
     # and
@@ -258,17 +259,18 @@ def plot_data(times, data, labels=None, figsize=(10, 7.5), frame_lines=False,
     for y in ytick_range:
         plt.plot(xtick_range, [y] * len(xtick_range), "--", lw=0.5, color="black", alpha=0.3)
 
-#   The following was only for a few graphs in the presentation
-#    xbreak = times[times.shape[0]*0.40]
-#    ax.axvline(xbreak, lw=0.5, color="black", alpha=0.3)
-#    # place a text box in upper left in axes coords
-#    ax.text(xbreak, ymax*0.8, r'$\mathbf{\rightarrow}$ Out of sample', 
-#            fontsize=ylabel_fontsize, verticalalignment='center', 
-#            horizontalalignment='left')
-#    xbreak = times[times.shape[0]*0.40]
-#    ax.text(xbreak, ymax*0.8, r'In sample $\mathbf{\leftarrow}$', 
-#            fontsize=ylabel_fontsize, verticalalignment='center', 
-#            horizontalalignment='right')
+    #   The following was only for a few graphs in the presentation
+    if out_of_sample is not None:
+        xbreak = times[out_of_sample]
+        ax.axvline(xbreak, lw=2.0, color="black", alpha=0.3)
+        # place a text box in upper left in axes coords
+        ax.text(xbreak, ymax*0.8, r'$\mathbf{\rightarrow}$ Out of sample', 
+                fontsize=ylabel_fontsize, verticalalignment='center', 
+                horizontalalignment='left')
+        xbreak = times[out_of_sample-4]
+        ax.text(xbreak, ymax*0.8, r'In sample $\mathbf{\leftarrow}$', 
+                fontsize=ylabel_fontsize, verticalalignment='center', 
+                horizontalalignment='right')
             
     # Remove the tick marks
     plt.tick_params(axis="both", which="both", bottom="off", top="off",    

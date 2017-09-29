@@ -11,18 +11,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 #from mpl_toolkits.mplot3d import Axes3D
 #import brewer2mpl
-#import neural_network as nn
+import neural_network as nn
 import instruments as inst
 import QuantLib as ql
 import pandas as pd
 #import plotly.plotly as py
 #import plotly.graph_objs as go
 
-def get_fnn(middle='_adj_error'):
-    dates = np.load(du.data_dir + 'test_' + middle + '_fnn_l4_e6_epoch200_dates.npy')
-    values = np.load(du.data_dir + 'test_' + middle + '_fnn_l4_e6_epoch200_values.npy')
-    val_hist = np.load(du.data_dir + 'test_' + middle + '_fnn_l4_e6_epoch200_val_hist.npy')
-    train_hist = np.load(du.data_dir + 'test_' + middle + '_fnn_l4_e6_epoch200_train_hist.npy')
+def get_fnn(middle='_adj_error_fnn_l4_e6_epoch200'):
+    dates = np.load(du.data_dir + 'test_' + middle + '_dates.npy')
+    values = np.load(du.data_dir + 'test_' + middle + '_values.npy')
+    val_hist = np.load(du.data_dir + 'test_' + middle + '_val_hist.npy')
+    train_hist = np.load(du.data_dir + 'test_' + middle + '_train_hist.npy')
     #start = dates.shape[0]*0.4
     #dates = dates[start:]
     #values = values[start:]
@@ -40,11 +40,11 @@ def running_mean(x, N):
     return (cumsum[N:] - cumsum[:-N]) / N 
 
 def plot():
-    du.data_dir = '../data/'
+    #du.data_dir = "../data/"
     mark_read = 'adj_error_s'
     mark_write = 'adj_error_insample40_s'
     data_labels = ('Default Starting Point', 'Historical Starting Point', 'Feed-forward Neural Net')
-    labels = ('50k_d20', '100k_d20', '150k_d20')
+    labels = ('225k_lr5em5_ex6_lay5_d20',)
     av_hist = np.empty((500, len(labels)))
     av_hist.fill(np.nan)
     max_len = 0
@@ -183,6 +183,222 @@ def plot4():
     print np.concatenate((xpoints, ypoints, zpoints), axis=1)
     return (X, Y, Z)
 
+
+def plot_history(file_name):
+    file_name = "../data_corr_mid_2014/" + file_name
+    model = nn.read_model(file_name)
+    data = np.array(model.history['history']['val_loss'])
+    data.shape = (data.shape[0], 1)
+    du.plot_data(None, data)
+    return data
+
+    
+def g2_plot_all():
+    #du.data_dir = "../data/"
+    mark_read_1 = 'adj_err_s'
+    mark_read_2 = '_mse_lr_1.0e-04_ex6_lay9_d20_bn_res_1_rlr_5.0e-01_rlrmin_5.0e-06_rlrpat_10_estop_41'
+    mark_write = 'history_adj_err'
+    data_labels = ('Simulated Annealing', 'Neural Network')
+    labels = ('0.5_0-264', 
+              '0.5_44-308', 
+              '0.5_88-352', 
+              '0.5_132-396', 
+              '0.5_176-440', 
+              '0.5_220-484',
+              '0.5_264-528',
+              '0.5_308-572',
+              '0.5_352-616',
+              '0.99_396-660', 
+              '0.99_440-704', 
+              '0.99_484-748', 
+              '0.99_528-792', 
+              '0.99_572-836', 
+              '0.99_616-880')
+    #labels = ('0.5_0-264', 
+    #          '0.5_132-396', 
+    #          '0.5_308-572', 
+    #          '0.99_440-704', 
+    #          '0.99_572-836')
+    #labels = ('0.5_0-264',)
+    
+    #              '0.5_264-528',
+    npv = None
+    vola = None
+    out_of_sample=264
+    for rank, label in enumerate(labels):
+        dates, values, _, _ = get_fnn(mark_read_1 + label + mark_read_2)
+        if npv is None:
+            npv = np.empty((dates.shape[0], len(data_labels)))
+            npv.fill(np.nan)
+            vola = np.empty((dates.shape[0], len(data_labels)))
+            vola.fill(np.nan)
+        
+        lims = [int(x) for x in label.split('_')[1].split('-')]
+        npv[lims[0]:, 1] = values[lims[0]:, 5] #Objective prior
+        temp = values[lims[0]:, 4] #History
+        temp3 = values[lims[0]:, 3] #Default starting point
+        filt = temp3 < temp
+        temp[filt] = temp3[filt]
+        npv[lims[0]:, 0] = temp
+
+        vola[lims[0]:, 1] = values[lims[0]:, 2]
+        temp_v = values[lims[0]:, 1] #History
+        temp3_v = values[lims[0]:, 0] #Default starting point
+        filt = temp3_v < temp_v
+        temp_v[filt] = temp3_v[filt]
+        vola[lims[0]:, 0] = temp_v
+    
+    vola *= 100
+    #colors = ('#66c2a5', '#fc8d62', '#8da0cb')
+    colors = ('#fc8d62', '#8da0cb')
+    du.plot_data(dates, npv, figsize=(21, 12), labels=data_labels, 
+                     save=du.data_dir + mark_write + '_npv_error_fnn.eps', colors=colors,
+                     legend_fontsize=22, legend_color='black', 
+                     xlabel_fontsize=22, xlabel_color='black', 
+                     ylabel_fontsize=22, ylabel_color='black',
+                     xtick_fontsize=18, xtick_color='black', yticks_format='{:.2f}', 
+                     ytick_fontsize=18, ytick_color='black',
+                     title='NPV Mean Square Error', title_fontsize=26,
+                     out_of_sample=out_of_sample)
+    du.plot_data(dates, vola, figsize=(21, 12), labels=data_labels, 
+                     save=du.data_dir + mark_write + '_vola_error_fnn.eps', colors=colors,
+                     legend_fontsize=22, legend_color='black', 
+                     xlabel_fontsize=22, xlabel_color='black', 
+                     ylabel_fontsize=22, ylabel_color='black',
+                     xtick_fontsize=18, xtick_color='black', yticks_format='{:.2f} %', 
+                     ytick_fontsize=18, ytick_color='black',
+                     title='Average Volatility Error', title_fontsize=26,
+                     out_of_sample=out_of_sample)
+    temp = vola[:, 1] - vola[:, 0]
+    temp = temp.reshape((temp.shape[0], 1))
+    du.plot_data(dates, temp, figsize=(21, 12), labels=None, 
+                     save=du.data_dir + mark_write + '_vola_diff_error_fnn.eps', colors=colors,
+                     legend_fontsize=22, legend_color='black', 
+                     xlabel_fontsize=22, xlabel_color='black', 
+                     ylabel_fontsize=22, ylabel_color='black',
+                     xtick_fontsize=18, xtick_color='black', yticks_format='{:.2f} %', 
+                     ytick_fontsize=18, ytick_color='black',
+                     title='Difference in Average Volatility Error', title_fontsize=26,
+                     out_of_sample=out_of_sample)
+    
+    
+    
+def g2_vola_heat_map():
+    file_name = du.data_dir + 'swo_gbp_g2pp_nn_adj_err_s0.5_0-264_mse_lr_1.0e-04_ex6_lay9_d20_bn_res_1_rlr_5.0e-01_rlrmin_5.0e-06_rlrpat_10_estop_41.p'
+    model = nn.read_model(file_name)
+    
+    model_dict = inst.g2
+    swo = inst.get_swaptiongen(model_dict)
+    errs = swo.history_heatmap(model, dates=swo._dates[264:308])
+
+def g2_objective_graph():
+    mark_read_1 = 'adj_err_s'
+    mark_read_2 = '_mse_lr_1.0e-04_ex6_lay9_d20_bn_res_1_rlr_5.0e-01_rlrmin_5.0e-06_rlrpat_10_estop_41'
+    mark_write = 'history_adj_err_4m'
+    data_labels = ('Simulated Annealing', 'Neural Network')
+    labels = ('0.5_0-264', 
+              '0.5_44-308', 
+              '0.5_88-352', 
+              '0.5_132-396', 
+              '0.5_176-440', 
+              '0.5_220-484',
+              '0.5_264-528',
+              '0.5_308-572',
+              '0.5_352-616',
+              '0.99_396-660', 
+              '0.99_440-704', 
+              '0.99_484-748', 
+              '0.99_528-792', 
+              '0.99_572-836', 
+              '0.99_616-880')
+    
+    labels = ('0.5_0-264',  
+              '0.5_88-352',
+              '0.5_176-440', 
+              '0.5_264-528',
+              '0.5_352-616', 
+              '0.99_440-704', 
+              '0.99_528-792', 
+              '0.99_616-880')
+    
+    model_dict = inst.g2
+    swo = inst.get_swaptiongen(model_dict)
+    max_rank = len(labels)-1
+    prev = 0
+    
+    npv = None
+    vola = None    
+    for rank, label in enumerate(labels):
+        dates, values, _, _ = get_fnn(mark_read_1 + label + mark_read_2)
+        if npv is None:
+            npv = np.empty((dates.shape[0], len(data_labels)))
+            npv.fill(np.nan)
+            vola = np.empty((dates.shape[0], len(data_labels)))
+            vola.fill(np.nan)
+            out_of_sample = int(label.split('_')[1].split('-')[1])
+            
+        file_name = du.data_dir + 'swo_gbp_g2pp_nn_' + mark_read_1 + label + mark_read_2 + '.p'
+        model = nn.read_model(file_name)
+        if rank < max_rank:
+            max_date = int(labels[rank+1].split('_')[1].split('-')[1])
+        else:
+            max_date = -1
+        
+        #Objective prior
+        npv[prev:max_date, 1], vola[prev:max_date, 1] = swo.objective_values(model, prev, max_date)
+
+        temp = values[prev:max_date, 4] #History
+        temp3 = values[prev:max_date, 3] #Default starting point
+        filt = temp3 < temp
+        temp[filt] = temp3[filt]
+        npv[prev:max_date, 0] = temp
+
+        
+        temp_v = values[prev:max_date, 1] #History
+        temp3_v = values[prev:max_date, 0] #Default starting point
+        filt = temp3_v < temp_v
+        temp_v[filt] = temp3_v[filt]
+        vola[prev:max_date, 0] = temp_v
+        
+        prev = max_date
+        
+    
+    vola *= 100
+    #colors = ('#66c2a5', '#fc8d62', '#8da0cb')
+    colors = ('#fc8d62', '#8da0cb')
+    du.plot_data(dates, npv, figsize=(21, 12), labels=data_labels, 
+                     save=du.data_dir + mark_write + '_npv_error_fnn.eps', colors=colors,
+                     legend_fontsize=22, legend_color='black', 
+                     xlabel_fontsize=22, xlabel_color='black', 
+                     ylabel_fontsize=22, ylabel_color='black',
+                     xtick_fontsize=18, xtick_color='black', yticks_format='{:.2f}', 
+                     ytick_fontsize=18, ytick_color='black',
+                     title='NPV Mean Square Error', title_fontsize=26,
+                     out_of_sample=out_of_sample)
+    du.plot_data(dates, vola, figsize=(21, 12), labels=data_labels, 
+                     save=du.data_dir + mark_write + '_vola_error_fnn.eps', colors=colors,
+                     legend_fontsize=22, legend_color='black', 
+                     xlabel_fontsize=22, xlabel_color='black', 
+                     ylabel_fontsize=22, ylabel_color='black',
+                     xtick_fontsize=18, xtick_color='black', yticks_format='{:.2f} %', 
+                     ytick_fontsize=18, ytick_color='black',
+                     title='Average Volatility Error', title_fontsize=26,
+                     out_of_sample=out_of_sample)
+    temp = vola[:, 1] - vola[:, 0]
+    temp = temp.reshape((temp.shape[0], 1))
+    du.plot_data(dates, temp, figsize=(21, 12), labels=None, 
+                     save=du.data_dir + mark_write + '_vola_diff_error_fnn.eps', colors=colors,
+                     legend_fontsize=22, legend_color='black', 
+                     xlabel_fontsize=22, xlabel_color='black', 
+                     ylabel_fontsize=22, ylabel_color='black',
+                     xtick_fontsize=18, xtick_color='black', yticks_format='{:.2f} %', 
+                     ytick_fontsize=18, ytick_color='black',
+                     title='Difference in Average Volatility Error', title_fontsize=26,
+                     out_of_sample=out_of_sample)
+    
+    
+    return (npv, vola)
+    
 #model = nn.read_model('../data/swo_gbp_hull_white_analytic_formulae_nn_s140000.p')
 #swo = inst.get_swaptiongen(inst.hullwhite_analytic)
 #orig_errors, errors = swo.errors(model, '2013-01-01')
@@ -203,4 +419,6 @@ def plot4():
 #               cmap=red_blue)
 
 #X, Y, Z = plot4()
-plot()
+#g2_plot_all()
+#objectives, lim_alpha, lim_beta = g2_objective_graph()
+(npv, vola) = g2_objective_graph()
