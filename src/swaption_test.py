@@ -4,6 +4,8 @@ Created on Thu Jun 30 17:18:10 2016
 
 @author: hernandeza
 """
+from __future__ import print_function
+
 import sys
 import getopt
 import traceback
@@ -32,7 +34,7 @@ def run(x, total = 499000., compare=False, epochs=500, prefix='SWO GBP ',
     else:
         postfix = postfix + '_simple'
     postfix = postfix + '_rlr_%.1e_rlrmin_%.1e_rlrpat_%s_estop_%s' % (reduceLRFactor, reduceLRMinLR, reduceLRPatience, earlyStopPatience)
-    print 'run  ' + str(x) + ' ' + postfix
+    print('run  ' + str(x) + ' ' + postfix)
     if x < 1.0:
         nn.total_size = x
     else:
@@ -44,7 +46,7 @@ def run(x, total = 499000., compare=False, epochs=500, prefix='SWO GBP ',
         assert(file_name is not None)
         model = nn.read_model(file_name)
     else:
-        model = nn.hullwhite_elu(exponent=exponent, layers=layers, lr=lr,
+        model = nn.hullwhite_fnn(exponent=exponent, layers=layers, lr=lr,
                                  prefix=prefix, postfix=postfix,
                                  dropout=dropout,
                                  dropout_first=dropout_first, 
@@ -57,7 +59,8 @@ def run(x, total = 499000., compare=False, epochs=500, prefix='SWO GBP ',
                                  model_dict=model_dict, 
                                  residual_cells=residual_cells,
                                  train_file=train_file,
-                                 do_transform=do_transform)
+                                 do_transform=do_transform,
+                                 activation="elu")
         model.train(epochs)
         if save:
             nn.write_model(model)
@@ -93,7 +96,7 @@ def main(argv=None):
         try:
             opts, args = getopt.getopt(argv[1:], '', argl)
         except getopt.GetoptError as err:
-            print str(err)
+            print(str(err))
             return 2
 
         prepTraining = False
@@ -132,7 +135,7 @@ def main(argv=None):
         loss = 'mean_squared_error'
         for o, a in opts:
             if o == '--training-data':
-                print 'Prepare training data'
+                print('Prepare training data')
                 prepTraining = True
                 sample_size = int(a)
             elif o == '--seed':
@@ -140,7 +143,7 @@ def main(argv=None):
             elif o == '--sample-size':
                 sample_size = int(a)
             elif o == '--calibrate-history':
-                print 'Calibrate history'
+                print('Calibrate history')
                 calibrate = True
             elif o == '--hull-white-fnn':
                 hw = 0
@@ -153,23 +156,23 @@ def main(argv=None):
             elif o == '--hull-white-cnn':
                 hw = 4
             elif o == '--test-fnn':
-                print 'Test fnn'
+                print('Test fnn')
                 nn.test_fnn(nn.hullwhite_fnn)
                 return 0
             elif o == '--test-rbf':
-                print 'Test rbf'
+                print('Test rbf')
                 nn.test_fnn(nn.hullwhite_rbf)
                 return 0
             elif o == '--test-relu':
-                print 'Test relu'
+                print('Test relu')
                 nn.test_fnn(nn.hullwhite_relu)
                 return 0
             elif o == '--test-elu':
-                print 'Test ELU'
+                print('Test ELU')
                 nn.test_fnn(nn.hullwhite_elu)
                 return 0
             elif o == '--test-cnn':
-                print 'Test cnn'
+                print('Test cnn')
                 nn.test_cnn(nn.hullwhite_cnn)
                 return 0
             elif o == '--gbp-to-h5':
@@ -237,6 +240,8 @@ def main(argv=None):
                     model_dict = inst.g2
                 elif a == 'g2++_local':
                     model_dict = inst.g2_local
+                elif a == 'g2++_vae':
+                    model_dict = inst.g2_vae
                 else:
                     raise RuntimeError('Unkown model')
 
@@ -306,11 +311,11 @@ def main(argv=None):
                                          reg=dropout, prefix=prefix, 
                                          postfix=postfix)
             else:
-                print 'Unknown option'
+                print('Unknown option')
                 return 1
             model.train(epochs)
             if save:
-                print 'Saving Model'
+                print('Saving Model')
                 nn.write_model(model)
             if compare:
                 swo.compare_history(model)
@@ -323,16 +328,15 @@ def main(argv=None):
                          'lineno'  : exc_traceback.tb_lineno,
                          'name'    : exc_traceback.tb_frame.f_code.co_name,
                          'type'    : exc_type.__name__,
-                         'message' : exc_value.message, # or see traceback._some_str()
+                         'message' : exc_value, # or see traceback._some_str()
                         }
         del(exc_type, exc_value, exc_traceback)
-        print
-        print traceback.format_exc()
-        print
-        print traceback_template % traceback_details
-        print
-        print str(err)
-        print >>sys.stderr, err
+        print('')
+        print(traceback.format_exc())
+        print('')
+        print(traceback_template % traceback_details)
+        print('')
+        print(str(err))
         return 2
 
     return 0

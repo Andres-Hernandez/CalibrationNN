@@ -15,7 +15,6 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.externals import joblib
 
-#data_dir = '../data_corr_mid_2014/'
 data_dir = '../data/'
 h5file = data_dir + 'data.h5'
 h5_ts_node = 'TS'
@@ -73,8 +72,9 @@ def read_csv(file_name):
 
 
 def store_hdf5(file_name, key, val):
-    with pd.get_store(file_name) as store:
+    with pd.HDFStore(file_name) as store:
         store[key] = val
+        store.close()
 
 
 def csv_to_hdf5(file_name, key, hdf5file_name):
@@ -83,7 +83,7 @@ def csv_to_hdf5(file_name, key, hdf5file_name):
 
 
 def from_hdf5(key, file_name=h5file):
-    with pd.get_store(file_name) as store:
+    with pd.HDFStore(file_name) as store:
         return store[key]
 
         
@@ -133,18 +133,18 @@ class TimeSeriesData(object):
             dates = self._data.index.levels[0]
         nbrDates = len(dates)
         mat = np.zeros((nbrDates,) + self._axisSize)
-        for iDate in xrange(nbrDates):
+        for iDate in range(nbrDates):
             mat[iDate] = self.__getimpl(dates[iDate])
         
         return mat
 
     def pca(self, **kwargs):
-        if kwargs.has_key('n_components'):
+        if 'n_components' in kwargs:
             nComp = kwargs['n_components']
         else:
             nComp = 0.995
 
-        if kwargs.has_key('dates'):
+        if 'dates' in kwargs:
             mat = self.to_matrix(kwargs['dates'])
         else:
             mat = self.to_matrix()
@@ -153,7 +153,7 @@ class TimeSeriesData(object):
         self._pipeline = Pipeline([('scaler', scaler), ('pca', pca)])
         self._pipeline.fit(mat)
         
-        if kwargs.has_key('file'):
+        if 'file' in kwargs:
             tofile(kwargs['file'], self._pipeline)
         
         return self._pipeline

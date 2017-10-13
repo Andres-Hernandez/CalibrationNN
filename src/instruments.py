@@ -5,6 +5,7 @@
 # This program is distributed in the hope that it will be useful, but WITHOUT
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 # FOR A PARTICULAR PURPOSE.  See the license for more details.
+from __future__ import print_function
 
 import string
 import data_utils as du
@@ -15,6 +16,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.covariance import empirical_covariance
 from scipy.linalg import sqrtm
 import matplotlib.pyplot as plt
+
+import variational_autoencoder as vae
 
 seed = 1027
 
@@ -84,7 +87,7 @@ def castToTenor(index):
     frequency = index.tenor().frequency()
     if frequency == 365:
         return 'OIS'
-    return 'L' + str(12/frequency) + 'M'
+    return 'L%dM' % int(12/frequency)
 
 def formatVol(v, digits = 2):
     format = '%%.%df %%%%' % digits
@@ -109,32 +112,32 @@ def flatten_name(name, node=h5_model_node, risk_factor='IR'):
 
 def postfix(size, with_error, history_start, history_end, history_part):
     if with_error:
-		file_name = '_adj_err'
-	else:
-		file_name = '_unadj_err'
-	file_name += '_s' + str(size)
-	if history_start is not None:
-		file_name += '_' + str(history_start) + '-' + str(history_end)
-	else:
-		file_name += '_' + str(history_part)
+        file_name = '_adj_err'
+    else:
+        file_name = '_unadj_err'
+    file_name += '_s' + str(size)
+    if history_start is not None:
+        file_name += '_' + str(history_start) + '-' + str(history_end)
+    else:
+        file_name += '_' + str(history_part)
 	
-	return file_name
+    return file_name
     
 def sample_file_name(swo, size, with_error, history_start, history_end, history_part):
-	file_name = flatten_name(swo.name).lower().replace('/', '_')
+    file_name = flatten_name(swo.name).lower().replace('/', '_')
     file_name = du.data_dir + file_name
                 
     if with_error:
-		file_name += '_adj_err'
-	else:
-		file_name += '_unadj_err'
-	file_name += '_s' + str(size)
-	if history_start is not None:
-		file_name += '_' + str(history_start) + '-' + str(history_end)
-	else:
-		file_name += '_' + str(history_part)
-	
-	return file_name
+        file_name += '_adj_err'
+    else:
+        file_name += '_unadj_err'
+    file_name += '_s' + str(size)
+    if history_start is not None:
+        file_name += '_' + str(history_start) + '-' + str(history_end)
+    else:
+        file_name += '_' + str(history_part)
+
+    return file_name
 	
 class SwaptionGen (du.TimeSeriesData):
     '''
@@ -168,13 +171,17 @@ class SwaptionGen (du.TimeSeriesData):
     '''
     def __init__(self, index, model_dict):
         self._model_dict = model_dict
-        if not self._model_dict.has_key('model') \
-        or not self._model_dict.has_key('engine') \
-        or not self._model_dict.has_key('name'):
+        if not 'model' in self._model_dict \
+        or not 'engine' in self._model_dict \
+        or not 'name' in self._model_dict:
             raise RuntimeError('Missing parameters')
         self.ccy = index.currency().code()
         self.model_name = self._model_dict['name'].replace("/", "")
-        self.name = 'SWO ' + self.ccy + ' ' + self.model_name
+        self.name = 'SWO ' + self.ccy 
+        if 'file_name' in self._model_dict:
+            self.name += ' ' + self._model_dict['file_name']
+        else:
+            self.name += + ' ' + self.model_name
         
         self.key_ts = du.h5_ts_node + '/SWO/' + self.ccy
         self.key_model = flatten_name('SWO/' + self.ccy + '/' + self.model_name)
@@ -202,7 +209,7 @@ class SwaptionGen (du.TimeSeriesData):
         self.__create_helpers()
 
         #Standard calibration nick-nacks
-        if self._model_dict.has_key('method'):
+        if 'method' in self._model_dict:
             self.method = self._model_dict['method'][0]
             self.end_criteria = self._model_dict['method'][1]
             self.constraint = self._model_dict['method'][2]
@@ -212,14 +219,15 @@ class SwaptionGen (du.TimeSeriesData):
             self.constraint = ql.PositiveConstraint()
             
         self._defaultParams = self.model.params()        
+        self._sampler = self._model_dict['sampler']
 
         #Output transformations
-        if self._model_dict.has_key('transformation'):
+        if 'transformation' in self._model_dict:
             self._transformation = self._model_dict['transformation']
         else:            
             self._transformation = None
         
-        if self._model_dict.has_key('inverse_transformation'):
+        if 'inverse_transformation' in self._model_dict:
             self._inverseTrans = self._model_dict['inverse_transformation']
         else:            
             self._inverseTrans = None
@@ -285,8 +293,8 @@ class SwaptionGen (du.TimeSeriesData):
                                 
         #Get history of parameters
         nb_swo_params = len(self._defaultParams)
-        columns_orig = map(lambda x: 'OrigParam' + str(x), range(nb_swo_params))
-        columns_hist = map(lambda x: 'HistParam' + str(x), range(nb_swo_params))
+        columns_orig = ['OrigParam%d' % x for x in range(nb_swo_params)]
+        columns_hist = ['HistParam%d' % x for x in range(nb_swo_params)]
         df_model = pd.get_store(du.h5file)[self.key_model]
         #Pick the best of the two
         swo_param_history_orig = df_model.loc[dates][columns_orig]
@@ -305,25 +313,25 @@ class SwaptionGen (du.TimeSeriesData):
         
     def train_history(self, *kwargs):
         #Retrieves training data from history 
-        if kwargs.has_key('history_start'):
+        if 'history_start' in kwargs:
             history_start = kwargs['history_start']
             history_end = kwargs['history_end']
             history_part = None
         else:
             history_start = None
             history_end = None
-            if kwargs.has_key('history_part'):
+            if 'history_part' in kwargs:
                 history_part = kwargs['history_part']
             else:
                 history_part = 0.4
         
-		if kwargs.has_key('save') and kwargs['save']:
-            if kwargs.has_key('file_name'):
+        if 'save' in kwargs and kwargs['save']:
+            if 'file_name' in kwargs:
                 file_name = kwargs['file_name']
             else:
-				file_name = sample_file_name(self, 0, True, 
-                                 history_start, history_end, history_part)
-            print 'Saving to file %s' % file_name
+                file_name = sample_file_name(self, 0, True, history_start, 
+                                             history_end, history_part)
+            print('Saving to file %s' % file_name)
         
         (dates, y, swo_error) = \
             self.__history(history_start, history_end, history_part, True)
@@ -334,11 +342,11 @@ class SwaptionGen (du.TimeSeriesData):
         nb_dates = len(dates)
         x_swo = np.zeros((nb_dates, nb_instruments), float_type)
         
-        for row in xrange(nb_dates):
+        for row in range(nb_dates):
             #Set term structure
             self.set_date(dates[row])
             self.model.setParams(ql.Array(y[row, :].tolist()))
-            for swaption in xrange(nb_instruments):
+            for swaption in range(nb_instruments):
                 try:
                     NPV = self.helpers[swaption].modelValue()
                     vola = self.helpers[swaption].impliedVolatility(NPV, 1.0e-6, 1000, 0.0001, 2.50)
@@ -346,8 +354,8 @@ class SwaptionGen (du.TimeSeriesData):
                 except RuntimeError as e:
                     print('Exception (%s) for (sample, maturity, length): (%s, %s, %s)' % (e, row, self._maturities[swaption], self._lengths[swaption]))
 
-        if kwargs.has_key('save') and kwargs['save']:            
-            if kwargs.has_key('append') and kwargs['append']:
+        if 'save' in kwargs and kwargs['save']:            
+            if 'append' in kwargs and kwargs['append']:
                 try:
                     x_swo_l = np.load(file_name + '_x_swo.npy')
                     x_ir_l = np.load(file_name + '_x_ir.npy')
@@ -406,7 +414,7 @@ class SwaptionGen (du.TimeSeriesData):
         header = self.okFormat % ('maturity','length','volatility','implied','error')
         dblrule = '=' * len(header)        
         
-        for iDate in xrange(start, end):
+        for iDate in range(start, end):
             self.model.setParams(self._defaultParams)
             #Return tuple (date, origEvals, optimEvals, histEvals, 
             #origObjective, origMeanError, histObjective, histMeanError, 
@@ -439,7 +447,7 @@ class SwaptionGen (du.TimeSeriesData):
         totalError = 0.0
         withException = 0
         errors = np.zeros((1, len(self.helpers)))
-        for swaption in xrange(len(self.helpers)):
+        for swaption in range(len(self.helpers)):
             vol = self._quotes[swaption].value()
             NPV = self.helpers[swaption].modelValue()
             try:
@@ -528,42 +536,33 @@ class SwaptionGen (du.TimeSeriesData):
                     histMeanErrorPrior, origParams, histParams, errors)
                 
         return (date, origEvals, origObjective, origMeanError, origParams, errors)
-        
-        
+
     def __random_draw(self, nb_samples, with_error=True, history_start=None,
-                      history_end=None, history_part=0.4):
+                      history_end=None, history_part=0.4, ir_pca=True):
         #Correlated IR, Model parameters, and errors
         nb_swo_params = len(self._defaultParams)
         nb_instruments = len(self.helpers)
         (dates, swo_param_history, swo_error_history) = \
             self.__history(history_start, history_end, history_part, with_error)
                 
-        #Get PCA pipeline & PCA value matrix for IR Curves
-        ir_pca = self._ircurve.pca(dates=dates)
-        nb_ir_params  = ir_pca.named_steps['pca'].n_components_
-        ir_param_history = ir_pca.transform(self._ircurve.to_matrix(dates))
+        if ir_pca:
+            #Get PCA pipeline & PCA value matrix for IR Curves
+            ir_pca = self._ircurve.pca(dates=dates)
+            nb_ir_params  = ir_pca.named_steps['pca'].n_components_
+            ir_param_history = ir_pca.transform(self._ircurve.to_matrix(dates))
+        else:
+            ir_param_history = self._ircurve.to_matrix(dates)
         
-        #Scale and calculate correlation
+        #Scale and draw random samples
         if self._transformation is not None:
             swo_param_history = self._transformation(swo_param_history)
         if with_error:
             history = np.concatenate((swo_param_history, ir_param_history, swo_error_history), axis=1)
         else:
             history = np.concatenate((swo_param_history, ir_param_history), axis=1)
-        scaler = StandardScaler()
-        scaler.fit(history)
-        scaled = scaler.transform(history)
-        sqrt_cov = sqrtm(empirical_covariance(scaled)).real
         
-        #Draw correlated random variables
-        #draws are generated transposed for convenience of the dot operation
-        if with_error:
-            draws = np.random.standard_normal((nb_swo_params + nb_ir_params + nb_instruments, nb_samples))
-        else:
-            draws = np.random.standard_normal((nb_swo_params + nb_ir_params, nb_samples))
-        draws = np.dot(sqrt_cov, draws)
-        draws = np.transpose(draws)
-        draws = scaler.inverse_transform(draws)
+        
+        draws = self._sampler(history, nb_samples)
         
         #Separate
         if self._inverseTrans is not None:
@@ -572,8 +571,6 @@ class SwaptionGen (du.TimeSeriesData):
             y = draws[:, 0:nb_swo_params]
         ir_draw = draws[:, nb_swo_params:nb_swo_params + nb_ir_params]
 
-        #y[-5:, :] = mswo
-        #ir_draw[-5:, :] = mir
         if with_error:
             error_draw = draws[:, nb_swo_params + nb_ir_params:]
             #error_draw[-5:, :] = merr
@@ -590,30 +587,31 @@ class SwaptionGen (du.TimeSeriesData):
         #future input for the supervised machine learning algorithm, and y is 
         #the desired output
         #Draw random model parameters and IR curves
-        if kwargs.has_key('seed'):
+        if 'seed' in kwargs:
             np.random.seed(kwargs['seed'])
         else:
             np.random.seed(0)
 
-        if kwargs.has_key('history_start'):
+        if 'history_start' in kwargs:
             history_start = kwargs['history_start']
             history_end = kwargs['history_end']
             history_part = None
         else:
             history_start = None
             history_end = None
-            if kwargs.has_key('history_part'):
+            if 'history_part' in kwargs:
                 history_part = kwargs['history_part']
             else:
                 history_part = 0.4
         
-		if kwargs.has_key('save') and kwargs['save']:
-            if kwargs.has_key('file_name'):
+        if 'save' in kwargs and kwargs['save']:
+            if 'file_name' in kwargs:
                 file_name = kwargs['file_name']
             else:
-				file_name = sample_file_name(self, nb_samples, with_error, 
-                                 history_start, history_end, history_part)
-            print 'Saving to file %s' % file_name
+                file_name = sample_file_name(self, nb_samples, with_error, 
+                                             history_start, history_end, 
+                                             history_part)
+            print('Saving to file %s' % file_name)
             
         (y, ir_draw, error_draw, dates) = self.__random_draw(nb_samples, 
                                                         with_error=with_error,
@@ -629,17 +627,17 @@ class SwaptionGen (du.TimeSeriesData):
         nb_instruments = len(self.helpers)
         x_swo = np.zeros((nb_samples, nb_instruments), float_type)
         x_ir  = np.zeros((nb_samples, len(self._ircurve.axis(0))), float_type)
-        if kwargs.has_key('plot') and kwargs['plot']:
+        if 'plot' in kwargs and kwargs['plot']:
             plot_ir = True
         else:
             plot_ir = False
             
-        if kwargs.has_key('threshold'):
+        if 'threshold' in kwargs:
             threshold = kwargs['threshold']
         else:
             threshold = nb_instruments + 1
         indices = np.ones((nb_samples, ), dtype=bool)
-        for row in xrange(nb_samples):
+        for row in range(nb_samples):
             if row % 1000 == 0:
                 print('Processing sample %s' % row)
             #Set term structure
@@ -653,8 +651,8 @@ class SwaptionGen (du.TimeSeriesData):
                 if row == nb_samples-1:
                     NPV = self.helpers[0].modelValue()
                     vola = self.helpers[0].impliedVolatility(NPV, 1.0e-6, 1000, 0.0001, 2.50)
-                    print "%s, %s" % (NPV, vola)
-                for swaption in xrange(nb_instruments):
+                    print("%s, %s" % (NPV, vola))
+                for swaption in range(nb_instruments):
                     try:
                         NPV = self.helpers[swaption].modelValue()
                         vola = self.helpers[swaption].impliedVolatility(NPV, 1.0e-6, 1000, 0.0001, 2.50)
@@ -679,8 +677,8 @@ class SwaptionGen (du.TimeSeriesData):
             y = y[indices, :]
             print('%s samples had too many nans' % np.sum(~indices))
         
-        if kwargs.has_key('save') and kwargs['save']:            
-            if kwargs.has_key('append') and kwargs['append']:
+        if 'save' in kwargs and kwargs['save']:
+            if 'append' in kwargs and kwargs['append']:
                 try:
                     x_swo_l = np.load(file_name + '_x_swo.npy')
                     x_ir_l = np.load(file_name + '_x_ir.npy')
@@ -908,24 +906,55 @@ class SwaptionGen (du.TimeSeriesData):
 
 
 '''
+Sampling functions
+'''
+
+def random_normal_draw(history, nb_samples, **kwargs):
+    """Random normal distributed draws
+    
+    Arguments:
+        history: numpy 2D array, with history along axis=0 and parameters 
+            along axis=1
+        nb_samples: number of samples to draw
+        
+    Returns:
+        numpy 2D array, with samples along axis=0 and parameters along axis=1
+    """
+    scaler = StandardScaler()
+    scaler.fit(history)
+    scaled = scaler.transform(history)
+    sqrt_cov = sqrtm(empirical_covariance(scaled)).real
+    
+    #Draw correlated random variables
+    #draws are generated transposed for convenience of the dot operation
+    draws = np.random.standard_normal((history.shape(-1), nb_samples))
+    draws = np.dot(sqrt_cov, draws)
+    draws = np.transpose(draws)
+    return scaler.inverse_transform(draws)
+
+'''
 Dictionary defining model
-It requires 3 parameters:
+It requires 4 parameters:
     name
     model: a function that creates a model. It takes as parameter a 
             yield curve handle
     engine: a function that creates an engine. It takes as paramters a
             calibration model and a yield curve handle
+    sampler: a sampling function taking a history and a number of samples
+            to produce
             
 Optional parameters:
     transformation: a preprocessing function
     inverse_transformation: a postprocessing function
     method: an optimization object
+    
 '''
 hullwhite_analytic = {'name' : 'Hull-White (analytic formulae)',
                      'model' : ql.HullWhite, 
                      'engine' : ql.JamshidianSwaptionEngine,
                      'transformation' : np.log, 
-                     'inverse_transformation' : np.exp}
+                     'inverse_transformation' : np.exp,
+                     'sampler': random_normal_draw}
 
 def g2_transformation(x):
     if isinstance(x, pd.DataFrame):
@@ -970,21 +999,32 @@ def g2_method_local():
     lower[4] = -1.0
     constraint = ql.NonhomogeneousBoundaryConstraint(lower, upper)
     return (method, criteria, constraint)
-    
+
 g2 = {'name' : 'G2++',
       'model' : ql.G2, 
       'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
-      'method': g2_method()}
+      'method': g2_method(),
+      'sampler': random_normal_draw}
 
 g2_local = {'name' : 'G2++_local',
       'model' : ql.G2, 
       'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
-      'method': g2_method_local()}
-       
+      'method': g2_method_local(),
+      'sampler': random_normal_draw}
+
+g2_vae = {'name' : 'G2++',
+      'model' : ql.G2, 
+      'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
+      'transformation' : g2_transformation,
+      'inverse_transformation' : g2_inverse_transformation,
+      'method': g2_method(),
+      'sampler': vae.sample_from_generator,
+      'file_name': 'g2pp_vae'}
+
 def get_swaptiongen(modelMap):
     index = ql.GBPLibor(ql.Period(6, ql.Months))
     swo = SwaptionGen(index, modelMap)
