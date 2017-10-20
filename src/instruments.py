@@ -12,8 +12,11 @@ import data_utils as du
 import pandas as pd
 import numpy as np
 import QuantLib as ql
-from sklearn.preprocessing import StandardScaler
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.utils import check_array
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.covariance import empirical_covariance
+from sklearn.pipeline import Pipeline
 from scipy.linalg import sqrtm
 import matplotlib.pyplot as plt
 
@@ -26,8 +29,6 @@ h5_error_node = 'Errors'
 # Interest Rate Curve hdf5 node
 h5_irc_node = 'IRC' 
 
-# This controls whether functionEvaluation is available in QuantLib library
-has_function_evals = True
 float_type = np.float32
 
 class IRCurve (du.TimeSeriesData):
@@ -83,17 +84,17 @@ class IRCurve (du.TimeSeriesData):
         return ql.MonotonicCubicZeroCurve(dates, values, self._daycounter)
 
 
-def castToTenor(index):
+def to_tenor(index):
     frequency = index.tenor().frequency()
     if frequency == 365:
         return 'OIS'
     return 'L%dM' % int(12/frequency)
 
-def formatVol(v, digits = 2):
+def format_vol(v, digits = 2):
     format = '%%.%df %%%%' % digits
     return format % (v * 100)
 
-def formatPrice(p, digits = 2):
+def format_price(p, digits = 2):
     format = '%%.%df' % digits
     return format % p
 
@@ -153,23 +154,24 @@ class SwaptionGen (du.TimeSeriesData):
         Methods:
     SwaptionGen['<date, format yyyy-mm-dd>'] returns the surface data for the day
     SwaptionGen.set_date(date) adjusts the swaption helpers to use the quotes 
-    from that date SwaptionGen.updateQuotes(volas) adjusts the swaption helpers 
+    from that date SwaptionGen.update_quotes(volas) adjusts the swaption helpers 
     to use the given quotes
     SwaptionGen.calibrate_history(name) calibrates the model on each day and 
     saves the results to the HDF5 file. The table has node Models/IR/<name>
     The index of the table is the dates
     The columns are:
-        OrigEvals - the number of evaluations needed to start from default params
+        orig_evals - the number of evaluations needed to start from default params
         OptimEvals - the number of evaluations needed if starting from optimized solution
-        OrigObjective - objective value starting from default parameters
-        OrigMeanError - mean error starting from default parameters
+        orig_objective - objective value starting from default parameters
+        orig_mean_error - mean error starting from default parameters
         HistEvals - the number of evaluations needed if starting from yesterday's params
         HistObjective - objective value starting from yesterday's params
         HistMeanError - mean error starting from yesterday's params
-        OrigParams - optimized parameters starting from default parameters
+        orig_params - optimized parameters starting from default parameters
         HistParams - optimized parameters starting from yesterday's params
     '''
-    def __init__(self, index, model_dict):
+    def __init__(self, index, model_dict, 
+                 error_type=ql.CalibrationHelper.ImpliedVolError, **kwargs):
         self._model_dict = model_dict
         if not 'model' in self._model_dict \
         or not 'engine' in self._model_dict \
@@ -181,7 +183,7 @@ class SwaptionGen (du.TimeSeriesData):
         if 'file_name' in self._model_dict:
             self.name += ' ' + self._model_dict['file_name']
         else:
-            self.name += + ' ' + self.model_name
+            self.name += ' ' + self.model_name
         
         self.key_ts = du.h5_ts_node + '/SWO/' + self.ccy
         self.key_model = flatten_name('SWO/' + self.ccy + '/' + self.model_name)
@@ -190,22 +192,23 @@ class SwaptionGen (du.TimeSeriesData):
         super(SwaptionGen, self).__init__(self.key_ts)
         
         #Yield Curve and dates
-        self._ircurve = IRCurve(self.ccy, castToTenor(index))
+        self._ircurve = IRCurve(self.ccy, to_tenor(index))
         self._dates = self.intersection(self._ircurve)
         self.refdate = ql.Date(self._dates[0].day, self._dates[0].month, self._dates[0].year)
         ql.Settings.instance().evaluationDate = self.refdate
-        self._termStructure = ql.RelinkableYieldTermStructureHandle()        
-        self._termStructure.linkTo(self._ircurve[self._dates[0]])
+        self._term_structure = ql.RelinkableYieldTermStructureHandle()        
+        self._term_structure.linkTo(self._ircurve[self._dates[0]])
         
         #Index, swaption model and pricing engine
-        self.index = index.clone(self._termStructure)
-        self.model = self._model_dict['model'](self._termStructure)
-        self.engine = self._model_dict['engine'](self.model, self._termStructure)
+        self.index = index.clone(self._term_structure)
+        self.model = self._model_dict['model'](self._term_structure)
+        self.engine = self._model_dict['engine'](self.model, self._term_structure)
         
         #Quotes & calibration helpers
         volas = self.__getitem__(self._dates[0])
         volas.shape = (volas.shape[0]*volas.shape[1],)
         self._quotes = [ql.SimpleQuote(vola) for vola in volas]
+        self.error_type = error_type
         self.__create_helpers()
 
         #Standard calibration nick-nacks
@@ -218,7 +221,7 @@ class SwaptionGen (du.TimeSeriesData):
             self.end_criteria = ql.EndCriteria(1000, 250, 1e-7, 1e-7, 1e-7)
             self.constraint = ql.PositiveConstraint()
             
-        self._defaultParams = self.model.params()        
+        self._default_params = self.model.params()        
         self._sampler = self._model_dict['sampler']
 
         #Output transformations
@@ -228,13 +231,13 @@ class SwaptionGen (du.TimeSeriesData):
             self._transformation = None
         
         if 'inverse_transformation' in self._model_dict:
-            self._inverseTrans = self._model_dict['inverse_transformation']
+            self._inverse_transform = self._model_dict['inverse_transformation']
         else:            
-            self._inverseTrans = None
+            self._inverse_transform = None
         
         #Misc
-        self.okFormat = '%12s |%12s |%12s |%12s |%12s'
-        self.errFormat = '%2s |%12s |'
+        self.ok_format = '%12s |%12s |%12s |%12s |%12s'
+        self.err_format = '%2s |%12s |'
         self.values = None
 
         
@@ -245,15 +248,15 @@ class SwaptionGen (du.TimeSeriesData):
         if dt != self.refdate or self.values is None:
             self.refdate = dt
             #Update term structure
-            self._termStructure.linkTo(self._ircurve[date])
+            self._term_structure.linkTo(self._ircurve[date])
             
             #Update quotes
             volas = self.__getitem__(date)
             volas.shape = (volas.shape[0]*volas.shape[1],)
-            self.updateQuotes(volas)
+            self.update_quotes(volas)
 
 
-    def updateQuotes(self, volas):
+    def update_quotes(self, volas):
         self.values = volas
         [quote.setValue(vola) for vola, quote in zip(volas, self._quotes)]
 
@@ -272,8 +275,8 @@ class SwaptionGen (du.TimeSeriesData):
                                           self.index, self.index.tenor(), 
                                           self.index.dayCounter(), 
                                           self.index.dayCounter(), 
-                                          self._termStructure,
-                                          ql.CalibrationHelper.ImpliedVolError)
+                                          self._term_structure,
+                                          self.error_type)
                      for maturity, length, quote in zip(mg[0], mg[1], self._quotes) ]
         #Set pricing engine
         for swaption in self.helpers:
@@ -292,14 +295,14 @@ class SwaptionGen (du.TimeSeriesData):
             dates = self._dates[:len(self._dates)*history_part]
                                 
         #Get history of parameters
-        nb_swo_params = len(self._defaultParams)
+        nb_swo_params = len(self._default_params)
         columns_orig = ['OrigParam%d' % x for x in range(nb_swo_params)]
         columns_hist = ['HistParam%d' % x for x in range(nb_swo_params)]
         df_model = pd.get_store(du.h5file)[self.key_model]
         #Pick the best of the two
         swo_param_history_orig = df_model.loc[dates][columns_orig]
         swo_param_history_hist = df_model.loc[dates][columns_hist]
-        orig_vs_hist = df_model.loc[dates]['OrigObjective'].values < df_model.loc[dates]['HistObjective'].values
+        orig_vs_hist = df_model.loc[dates]['orig_objective'].values < df_model.loc[dates]['HistObjective'].values
         swo_param_history = swo_param_history_orig.copy(deep=True)
         swo_param_history[~orig_vs_hist] = swo_param_history_hist[~orig_vs_hist]
         
@@ -384,15 +387,15 @@ class SwaptionGen (du.TimeSeriesData):
             if args[1] > 0:
                 end = args[1]                
 
-        prev_params = self._defaultParams
+        prev_params = self._default_params
         nb_params = len(prev_params)
         nb_instruments = len(self.helpers)
         columns = ['OrigEvals', 'OptimEvals', 'OrigObjective', 'OrigMeanError', 
                    'HistEvals', 'HistObjective', 'HistMeanError', 
                    'HistObjectivePrior', 'HistMeanErrorPrior'] 
         size_cols = len(columns)
-        columns = columns + map(lambda x: 'OrigParam' + str(x), range(nb_params))
-        columns = columns + map(lambda x: 'HistParam' + str(x), range(nb_params))
+        columns = columns + ['OrigParam' + str(x) for x in range(nb_params)]
+        columns = columns + ['HistParam' + str(x) for x in range(nb_params)]
         if clean:
             rows_model = np.empty((len(self._dates), len(columns)))
             rows_model.fill(np.nan)
@@ -411,13 +414,13 @@ class SwaptionGen (du.TimeSeriesData):
                     raise RuntimeError("Incompatible file")
                 rows_error = df_error.values
 
-        header = self.okFormat % ('maturity','length','volatility','implied','error')
+        header = self.ok_format % ('maturity','length','volatility','implied','error')
         dblrule = '=' * len(header)        
         
         for iDate in range(start, end):
-            self.model.setParams(self._defaultParams)
-            #Return tuple (date, origEvals, optimEvals, histEvals, 
-            #origObjective, origMeanError, histObjective, histMeanError, 
+            self.model.setParams(self._default_params)
+            #Return tuple (date, orig_evals, optimEvals, histEvals, 
+            #orig_objective, orig_mean_error, histObjective, histMeanError, 
             #original params, hist parameters, errors)            
             try:
                 res = self.calibrate(self._dates[iDate], prev_params)
@@ -428,7 +431,7 @@ class SwaptionGen (du.TimeSeriesData):
                 print("Error: %s" % e)
                 print(dblrule)
                 res = (self._dates[iDate], -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-                       self._defaultParams, self._defaultParams, np.zeros((1, nb_instruments)))
+                       self._default_params, self._default_params, np.zeros((1, nb_instruments)))
             rows_model[iDate, 0:size_cols] = res[1:size_cols+1]
             rows_model[iDate, size_cols:size_cols+nb_params] = res[size_cols+1]
             rows_model[iDate, size_cols+nb_params:size_cols+nb_params*2] = res[size_cols+2]
@@ -444,8 +447,8 @@ class SwaptionGen (du.TimeSeriesData):
 
 
     def __errors(self):
-        totalError = 0.0
-        withException = 0
+        total_error = 0.0
+        with_exception = 0
         errors = np.zeros((1, len(self.helpers)))
         for swaption in range(len(self.helpers)):
             vol = self._quotes[swaption].value()
@@ -453,21 +456,21 @@ class SwaptionGen (du.TimeSeriesData):
             try:
                 implied = self.helpers[swaption].impliedVolatility(NPV, 1.0e-4, 1000, 0.001, 1.80)
                 errors[0, swaption] = vol - implied
-                totalError += abs(errors[0, swaption])
+                total_error += abs(errors[0, swaption])
             except RuntimeError:
-                withException = withException + 1
-        denom = len(self.helpers) - withException
+                with_exception = with_exception + 1
+        denom = len(self.helpers) - with_exception
         if denom == 0:
             average_error = float('inf')
         else:
-            average_error = totalError/denom
+            average_error = total_error/denom
             
         return average_error, errors
 
 
     def calibrate(self, date, *args):
         name = self.model_name
-        header = self.okFormat % ('maturity','length','volatility','implied','error')
+        header = self.ok_format % ('maturity','length','volatility','implied','error')
         rule = '-' * len(header)
         dblrule = '=' * len(header)
     
@@ -482,28 +485,33 @@ class SwaptionGen (du.TimeSeriesData):
                                  self.end_criteria, self.constraint)
                                  
             params = self.model.params()
-            origObjective = self.model.value(params, self.helpers)
+            orig_objective = self.model.value(params, self.helpers)
             print('Parameters   : %s ' % self.model.params() )
-            print('Objective    : %s ' % origObjective)
+            print('Objective    : %s ' % orig_objective)
 
-            origMeanError, errors = self.__errors()
-            print('Average error: %s ' % formatVol(origMeanError,4))
+            orig_mean_error, errors = self.__errors()
+            print('Average error: %s ' % format_vol(orig_mean_error,4))
             print(dblrule)
         except RuntimeError as e:
             print("Error: %s" % e)
             print(dblrule)
-            origObjective = float("inf")
-            origMeanError = float("inf")
+            orig_objective = float("inf")
+            orig_mean_error = float("inf")
             errors = np.zeros((1, len(self.helpers)))            
 
-        origEvals = self.model.functionEvaluation()
-        origParams = np.array([ v for v in self.model.params() ])
+        if 'functionEvaluation' in dir(self.model):
+            with_evals = True
+            orig_evals = self.model.functionEvaluation()
+        else:
+            with_evals = False
+            optimEvals = -1
+        orig_params = np.array([ v for v in self.model.params() ])
         if len(args) > 0:
             #Recalibrate using optimized parameters
             try:
                 self.model.calibrate(self.helpers, self.method, 
                                      self.end_criteria, self.constraint)
-                optimEvals = self.model.functionEvaluation()
+                optimEvals = self.model.functionEvaluation() if with_evals else -1
             except RuntimeError as e:
                 optimEvals = -1
             
@@ -516,31 +524,31 @@ class SwaptionGen (du.TimeSeriesData):
                                      self.end_criteria, self.constraint)
                 histObjective = self.model.value(self.model.params(), self.helpers)
                 histMeanError, errors_hist = self.__errors()
-                if histObjective < origObjective:
+                if histObjective < orig_objective:
                     errors = errors_hist
             except RuntimeError:
                 histObjectivePrior = float("inf")
                 histMeanErrorPrior = float("inf")
                 histObjective = float("inf")
                 histMeanError = float("inf")
-                
-            histEvals = self.model.functionEvaluation()
+            
+            histEvals = self.model.functionEvaluation() if with_evals else -1
             histParams = np.array([ v for v in self.model.params() ])
                 
-            #Return tuple (date, origEvals, optimEvals, histEvals, 
-            #origObjective, origMeanError, histObjective, histMeanError, 
+            #Return tuple (date, orig_evals, optimEvals, histEvals, 
+            #orig_objective, orig_mean_error, histObjective, histMeanError, 
             #histObjectivePrior, histMeanErrorPrior,
             #original params, hist parameters, errors)
-            return (date, origEvals, optimEvals, origObjective, origMeanError, 
+            return (date, orig_evals, optimEvals, orig_objective, orig_mean_error, 
                     histEvals, histObjective, histMeanError, histObjectivePrior,
-                    histMeanErrorPrior, origParams, histParams, errors)
+                    histMeanErrorPrior, orig_params, histParams, errors)
                 
-        return (date, origEvals, origObjective, origMeanError, origParams, errors)
+        return (date, orig_evals, orig_objective, orig_mean_error, orig_params, errors)
 
     def __random_draw(self, nb_samples, with_error=True, history_start=None,
                       history_end=None, history_part=0.4, ir_pca=True):
         #Correlated IR, Model parameters, and errors
-        nb_swo_params = len(self._defaultParams)
+        nb_swo_params = len(self._default_params)
         nb_instruments = len(self.helpers)
         (dates, swo_param_history, swo_error_history) = \
             self.__history(history_start, history_end, history_part, with_error)
@@ -565,8 +573,8 @@ class SwaptionGen (du.TimeSeriesData):
         draws = self._sampler(history, nb_samples)
         
         #Separate
-        if self._inverseTrans is not None:
-            y = self._inverseTrans(draws[:, 0:nb_swo_params])
+        if self._inverse_transform is not None:
+            y = self._inverse_transform(draws[:, 0:nb_swo_params])
         else:
             y = draws[:, 0:nb_swo_params]
         ir_draw = draws[:, nb_swo_params:nb_swo_params + nb_ir_params]
@@ -645,7 +653,7 @@ class SwaptionGen (du.TimeSeriesData):
                 (x_ir[row, :], curve) = self._ircurve.rebuild(dates[row], ir_draw[row, :])
                 if plot_ir:
                     du.plot_data(self._ircurve.axis(0).values, x_ir[row, :])
-                self._termStructure.linkTo(curve)
+                self._term_structure.linkTo(curve)
                 self.model.setParams(ql.Array(y[row, :].tolist()))
                 nb_nan_swo = 0
                 if row == nb_samples-1:
@@ -698,7 +706,7 @@ class SwaptionGen (du.TimeSeriesData):
     def evaluate(self, params, irValues, date):
         self.refdate = ql.Date(date.day, date.month, date.year)
         _, curve = self._ircurve.build(self.refdate, irValues)
-        self._termStructure.linkTo(curve)
+        self._term_structure.linkTo(curve)
         qlParams = ql.Array(params.tolist())
         self.model.setParams(qlParams)
         return self.__errors()
@@ -761,7 +769,7 @@ class SwaptionGen (du.TimeSeriesData):
         params_predict = params_predict.reshape((params_predict.shape[1],))
         self.model.setParams(ql.Array(params_predict.tolist()))
         print("Predict value = %f" % self.model.value(self.model.params(), self.helpers))
-        orig_objective = df.ix[date, 'OrigObjective']
+        orig_objective = df.ix[date, 'orig_objective']
         hist_objective = df.ix[date, 'HistObjective']
         if orig_objective < hist_objective:
             name = 'OrigParam'
@@ -776,8 +784,8 @@ class SwaptionGen (du.TimeSeriesData):
         self.model.setParams(ql.Array(params_calib.tolist()))
         print("Calib value = %f" % self.model.value(self.model.params(), self.helpers))
         
-        params_optim = np.array(self._defaultParams)
-        self.model.setParams(self._defaultParams)
+        params_optim = np.array(self._default_params)
+        self.model.setParams(self._default_params)
         print("Optim value = %f" % self.model.value(self.model.params(), self.helpers))
         
         #The intention is to sample the plane that joins the three points:
@@ -852,21 +860,21 @@ class SwaptionGen (du.TimeSeriesData):
             except RuntimeError:
                 objectiveAfter = np.nan
 
-            origMeanError = df.ix[date, 'OrigMeanError']
+            orig_mean_error = df.ix[date, 'orig_mean_error']
             histMeanError = df.ix[date, 'HistMeanError']
-            origObjective = df.ix[date, 'OrigObjective']
+            orig_objective = df.ix[date, 'orig_objective']
             histObjective = df.ix[date, 'HistObjective']
                 
 
-            values[i, 0] = origMeanError
+            values[i, 0] = orig_mean_error
             values[i, 1] = histMeanError
             values[i, 2] = meanErrorPrior
-            values[i, 3] = origObjective
+            values[i, 3] = orig_objective
             values[i, 4] = histObjective
             values[i, 5] = objectivePrior
             values[i, 6] = meanErrorAfter
             values[i, 7] = objectiveAfter
-            if origObjective < histObjective:
+            if orig_objective < histObjective:
                 values[i, 8] = df.ix[date, 'OrigParam0']
                 values[i, 9] = df.ix[date, 'OrigParam1']
                 values[i, 10] = df.ix[date, 'OrigParam2']
@@ -880,17 +888,17 @@ class SwaptionGen (du.TimeSeriesData):
                 values[i, 12] = df.ix[date, 'HistParam4']
 
             print('Date=%s' % date)
-            print('Vola: Orig=%s Hist=%s ModelPrior=%s ModelAfter=%s' % (origMeanError, histMeanError, meanErrorPrior, meanErrorAfter))
-            print('NPV:  Orig=%s Hist=%s Model=%s ModelAfter=%s' % (origObjective, histObjective, objectivePrior, objectiveAfter))
+            print('Vola: Orig=%s Hist=%s ModelPrior=%s ModelAfter=%s' % (orig_mean_error, histMeanError, meanErrorPrior, meanErrorAfter))
+            print('NPV:  Orig=%s Hist=%s Model=%s ModelAfter=%s' % (orig_objective, histObjective, objectivePrior, objectiveAfter))
             print('Param0: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 8], params[0][0], paramsC[0]))
             print('Param1: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 9], params[0][1], paramsC[1]))
             print('Param2: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 10], params[0][2], paramsC[2]))
             print('Param3: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 11], params[0][3], paramsC[3]))
             print('Param4: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 12], params[0][4], paramsC[4]))
             
-            vals[i, 0] = (meanErrorPrior - origMeanError)/origMeanError*100.0
+            vals[i, 0] = (meanErrorPrior - orig_mean_error)/orig_mean_error*100.0
             vals[i, 1] = (meanErrorPrior - histMeanError)/histMeanError*100.0
-            vals[i, 2] = (meanErrorAfter - origMeanError)/origMeanError*100.0
+            vals[i, 2] = (meanErrorAfter - orig_mean_error)/orig_mean_error*100.0
             vals[i, 3] = (meanErrorAfter - histMeanError)/histMeanError*100.0
             
             print('      impO=%s impH=%s impAfterO=%s impAfterH=%s' % (vals[i, 0], vals[i, 1], vals[i,2], vals[i, 3]))
@@ -905,6 +913,123 @@ class SwaptionGen (du.TimeSeriesData):
         return (dates, values)
 
 
+class FunctionTransformerWithInverse(BaseEstimator, TransformerMixin):
+    def __init__(self, func=None, inv_func=None, validate=True,
+                 accept_sparse=False, pass_y=False):
+        self.validate = validate
+        self.accept_sparse = accept_sparse
+        self.pass_y = pass_y
+        self.func = func
+        self.inv_func = inv_func
+        
+    def fit(self, X, y=None):
+        if self.validate:
+            check_array(X, self.accept_sparse)
+        return self
+
+    def transform(self, X, y=None):
+        if self.validate:
+            X = check_array(X, self.accept_sparse)
+        if self.func is None:
+            return X
+        return self.func(X)
+        
+    def inverse_transform(self, X, y=None):
+        if self.validate:
+            X = check_array(X, self.accept_sparse)            
+        if self.inv_func is None:
+            return X
+        return self.inv_func(X)
+
+def retrieve_swo_train_set(file_name, transform=True, func=None, inv_func=None,
+                           valid_size=0.2, test_size=0.2, total_size=1.0,
+                           scaler=MinMaxScaler(), concatenated=True):
+    #To make it reproducible    
+    np.random.seed(seed)
+    
+    x_swo = np.load(file_name + '_x_swo.npy')
+    x_ir = np.load(file_name + '_x_ir.npy')
+    y = np.load(file_name + '_y.npy')
+    
+    train_size = total_size - valid_size - test_size
+    assert(train_size > 0. and train_size <= 1.)
+    assert(valid_size >= 0. and valid_size <= 1.)
+    assert(test_size >= 0. and test_size <= 1.)
+    
+    total_sample = y.shape[0]
+    print("Total sample: %d" % total_sample)
+    train_sample = int(np.ceil(total_sample*train_size))
+    assert(train_sample > 0)
+    valid_sample = int(np.floor(total_sample*valid_size))
+    test_sample = int(np.floor(total_sample*test_size))
+    total_sample -= train_sample
+    if total_sample - valid_sample < 0:
+        valid_sample = 0
+        test_sample = 0
+    else:
+        total_sample -= valid_sample
+        if total_sample - test_sample < 0:
+            test_sample = 0
+    
+    index = np.arange(y.shape[0])
+    np.random.shuffle(index)
+    x_swo_train = x_swo[index[:train_sample]]
+    x_ir_train = x_ir[index[:train_sample]]
+    if concatenated:
+        x_train = np.concatenate((x_swo_train, x_ir_train), axis=1)
+    else:
+        x_train = (x_swo_train, x_ir_train)
+    y_train = y[index[:train_sample]]
+    
+    if valid_sample == 0:
+        x_valid = None
+        y_valid = None
+    else:
+        x_swo_valid = x_swo[index[train_sample:train_sample+valid_sample]]
+        x_ir_valid = x_ir[index[train_sample:train_sample+valid_sample]]
+        if concatenated:
+            x_valid = np.concatenate((x_swo_valid, x_ir_valid), axis=1)
+        else:
+            x_valid = (x_swo_valid, x_ir_valid)
+        y_valid = y[index[train_sample:train_sample+valid_sample]]
+
+    if test_sample == 0:
+        x_test = None
+        y_test = None
+    else:
+        x_swo_test = x_swo[index[train_sample+valid_sample:train_sample+valid_sample+test_sample]]
+        x_ir_test = x_ir[index[train_sample+valid_sample:train_sample+valid_sample+test_sample]]
+        if concatenated:
+            x_test = np.concatenate((x_swo_test, x_ir_test), axis=1)
+        else:
+            x_test = (x_swo_test, x_ir_test)
+        y_test = y[index[train_sample+valid_sample:train_sample+valid_sample+test_sample]]
+    
+    if transform:
+        if func is not None or inv_func is not None:
+            funcTrm = FunctionTransformerWithInverse(func=func, 
+                                                     inv_func=inv_func)
+            pipeline = Pipeline([('funcTrm', funcTrm), ('scaler', scaler)])
+        else:
+            pipeline = scaler
+
+        y_train = pipeline.fit_transform(y_train)
+        if y_valid is not None:
+            y_valid = pipeline.transform(y_valid)
+        if y_test is not None:
+            y_test = pipeline.transform(y_test)
+    else:
+        print('No transform requested')
+        pipeline = None
+
+    return {'x_train': x_train,
+            'y_train': y_train,
+            'x_valid': x_valid,
+            'y_valid': y_valid,
+            'x_test': x_test,
+            'y_test': y_test,
+            'transform': pipeline}
+    
 '''
 Sampling functions
 '''
