@@ -419,8 +419,8 @@ class SwaptionGen (du.TimeSeriesData):
         
         for iDate in range(start, end):
             self.model.setParams(self._default_params)
-            #Return tuple (date, orig_evals, optimEvals, histEvals, 
-            #orig_objective, orig_mean_error, histObjective, histMeanError, 
+            #Return tuple (date, orig_evals, optim_evals, hist_evals, 
+            #orig_objective, orig_mean_error, hist_objective, hist_mean_error, 
             #original params, hist parameters, errors)            
             try:
                 res = self.calibrate(self._dates[iDate], prev_params)
@@ -504,44 +504,44 @@ class SwaptionGen (du.TimeSeriesData):
             orig_evals = self.model.functionEvaluation()
         else:
             with_evals = False
-            optimEvals = -1
+            orig_evals = -1
         orig_params = np.array([ v for v in self.model.params() ])
         if len(args) > 0:
             #Recalibrate using optimized parameters
             try:
                 self.model.calibrate(self.helpers, self.method, 
                                      self.end_criteria, self.constraint)
-                optimEvals = self.model.functionEvaluation() if with_evals else -1
+                optim_evals = self.model.functionEvaluation() if with_evals else -1
             except RuntimeError as e:
-                optimEvals = -1
+                optim_evals = -1
             
             #Recalibrate using previous day's parameters
             self.model.setParams(args[0])
             try:
-                histObjectivePrior = self.model.value(self.model.params(), self.helpers)
-                histMeanErrorPrior, _ = self.__errors()
+                hist_objective_prior = self.model.value(self.model.params(), self.helpers)
+                hist_mean_error_prior, _ = self.__errors()
                 self.model.calibrate(self.helpers, self.method, 
                                      self.end_criteria, self.constraint)
-                histObjective = self.model.value(self.model.params(), self.helpers)
-                histMeanError, errors_hist = self.__errors()
-                if histObjective < orig_objective:
+                hist_objective = self.model.value(self.model.params(), self.helpers)
+                hist_mean_error, errors_hist = self.__errors()
+                if hist_objective < orig_objective:
                     errors = errors_hist
             except RuntimeError:
-                histObjectivePrior = float("inf")
-                histMeanErrorPrior = float("inf")
-                histObjective = float("inf")
-                histMeanError = float("inf")
+                hist_objective_prior = float("inf")
+                hist_mean_error_prior = float("inf")
+                hist_objective = float("inf")
+                hist_mean_error = float("inf")
             
-            histEvals = self.model.functionEvaluation() if with_evals else -1
-            histParams = np.array([ v for v in self.model.params() ])
+            hist_evals = self.model.functionEvaluation() if with_evals else -1
+            hist_params = np.array([ v for v in self.model.params() ])
                 
-            #Return tuple (date, orig_evals, optimEvals, histEvals, 
-            #orig_objective, orig_mean_error, histObjective, histMeanError, 
-            #histObjectivePrior, histMeanErrorPrior,
+            #Return tuple (date, orig_evals, optim_evals, hist_evals, 
+            #orig_objective, orig_mean_error, hist_objective, hist_mean_error, 
+            #hist_objective_prior, hist_mean_error_prior,
             #original params, hist parameters, errors)
-            return (date, orig_evals, optimEvals, orig_objective, orig_mean_error, 
-                    histEvals, histObjective, histMeanError, histObjectivePrior,
-                    histMeanErrorPrior, orig_params, histParams, errors)
+            return (date, orig_evals, optim_evals, orig_objective, orig_mean_error, 
+                    hist_evals, hist_objective, hist_mean_error, hist_objective_prior,
+                    hist_mean_error_prior, orig_params, hist_params, errors)
                 
         return (date, orig_evals, orig_objective, orig_mean_error, orig_params, errors)
 
@@ -861,20 +861,20 @@ class SwaptionGen (du.TimeSeriesData):
                 objectiveAfter = np.nan
 
             orig_mean_error = df.ix[date, 'orig_mean_error']
-            histMeanError = df.ix[date, 'HistMeanError']
+            hist_mean_error = df.ix[date, 'HistMeanError']
             orig_objective = df.ix[date, 'orig_objective']
-            histObjective = df.ix[date, 'HistObjective']
+            hist_objective = df.ix[date, 'HistObjective']
                 
 
             values[i, 0] = orig_mean_error
-            values[i, 1] = histMeanError
+            values[i, 1] = hist_mean_error
             values[i, 2] = meanErrorPrior
             values[i, 3] = orig_objective
-            values[i, 4] = histObjective
+            values[i, 4] = hist_objective
             values[i, 5] = objectivePrior
             values[i, 6] = meanErrorAfter
             values[i, 7] = objectiveAfter
-            if orig_objective < histObjective:
+            if orig_objective < hist_objective:
                 values[i, 8] = df.ix[date, 'OrigParam0']
                 values[i, 9] = df.ix[date, 'OrigParam1']
                 values[i, 10] = df.ix[date, 'OrigParam2']
@@ -888,8 +888,8 @@ class SwaptionGen (du.TimeSeriesData):
                 values[i, 12] = df.ix[date, 'HistParam4']
 
             print('Date=%s' % date)
-            print('Vola: Orig=%s Hist=%s ModelPrior=%s ModelAfter=%s' % (orig_mean_error, histMeanError, meanErrorPrior, meanErrorAfter))
-            print('NPV:  Orig=%s Hist=%s Model=%s ModelAfter=%s' % (orig_objective, histObjective, objectivePrior, objectiveAfter))
+            print('Vola: Orig=%s Hist=%s ModelPrior=%s ModelAfter=%s' % (orig_mean_error, hist_mean_error, meanErrorPrior, meanErrorAfter))
+            print('NPV:  Orig=%s Hist=%s Model=%s ModelAfter=%s' % (orig_objective, hist_objective, objectivePrior, objectiveAfter))
             print('Param0: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 8], params[0][0], paramsC[0]))
             print('Param1: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 9], params[0][1], paramsC[1]))
             print('Param2: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 10], params[0][2], paramsC[2]))
@@ -897,9 +897,9 @@ class SwaptionGen (du.TimeSeriesData):
             print('Param4: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 12], params[0][4], paramsC[4]))
             
             vals[i, 0] = (meanErrorPrior - orig_mean_error)/orig_mean_error*100.0
-            vals[i, 1] = (meanErrorPrior - histMeanError)/histMeanError*100.0
+            vals[i, 1] = (meanErrorPrior - hist_mean_error)/hist_mean_error*100.0
             vals[i, 2] = (meanErrorAfter - orig_mean_error)/orig_mean_error*100.0
-            vals[i, 3] = (meanErrorAfter - histMeanError)/histMeanError*100.0
+            vals[i, 3] = (meanErrorAfter - hist_mean_error)/hist_mean_error*100.0
             
             print('      impO=%s impH=%s impAfterO=%s impAfterH=%s' % (vals[i, 0], vals[i, 1], vals[i,2], vals[i, 3]))
         
