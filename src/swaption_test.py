@@ -99,7 +99,7 @@ def main(argv=None):
             print(str(err))
             return 2
 
-        prepTraining = False
+        prep_training = False
         size = 0
         seed = 0
         calibrate = False
@@ -136,7 +136,7 @@ def main(argv=None):
         for o, a in opts:
             if o == '--training-data':
                 print('Prepare training data')
-                prepTraining = True
+                prep_training = True
                 sample_size = int(a)
             elif o == '--seed':
                 seed = int(a)
@@ -245,7 +245,7 @@ def main(argv=None):
                 else:
                     raise RuntimeError('Unkown model')
 
-        if prepTraining:
+        if prep_training:
             swo = inst.get_swaptiongen(model_dict)
             file_name = inst.sample_file_name(swo, sample_size, with_error, history_start, 
                                               history_end, history_part)

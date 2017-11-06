@@ -84,7 +84,9 @@ def csv_to_hdf5(file_name, key, hdf5file_name):
 
 def from_hdf5(key, file_name=h5file):
     with pd.HDFStore(file_name) as store:
-        return store[key]
+        data =  store[key]
+        store.close()
+    return data
 
         
 def tofile(file_name, model):
@@ -102,10 +104,10 @@ class TimeSeriesData(object):
         fd = self._data.loc[fr.name[0]].index
         if hasattr(fd, 'levels'):
             self._levels = fd.levels
-            self._axisSize = tuple( [len(x) for x in self._levels] )
+            self._axis_shape = tuple( [len(x) for x in self._levels] )
         else:
             self._levels = [fd]
-            self._axisSize = ( len(fd), )
+            self._axis_shape = ( len(fd), )
         self._dates = self._data.index.levels[0]
         self._pipeline = None
         
@@ -114,7 +116,7 @@ class TimeSeriesData(object):
 
     def __getimpl(self, date):
         data = self._data.loc[date].as_matrix()
-        data.shape = self._axisSize
+        data.shape = self._axis_shape
         return data
     
     def axis(self, i):
@@ -132,7 +134,7 @@ class TimeSeriesData(object):
         else:
             dates = self._data.index.levels[0]
         nbrDates = len(dates)
-        mat = np.zeros((nbrDates,) + self._axisSize)
+        mat = np.zeros((nbrDates,) + self._axis_shape)
         for iDate in range(nbrDates):
             mat[iDate] = self.__getimpl(dates[iDate])
         

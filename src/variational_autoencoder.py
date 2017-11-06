@@ -13,7 +13,7 @@ from keras.callbacks import ReduceLROnPlateau
 from sklearn.preprocessing import MinMaxScaler
 
 def build_model(latent_dim, x_train, x_valid=None, hidden_dims=None, 
-                return_dims=None, activation='relu', lr=0.01, epsilon_std=1.0,
+                return_dims=None, activation='relu', lr=0.008, epsilon_std=1.0,
                 batch_size=20, epochs=1000):
     
     optimizer = optimizers.Adam(lr=lr)
