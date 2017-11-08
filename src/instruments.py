@@ -823,10 +823,10 @@ class SwaptionGen (du.TimeSeriesData):
         
         method = ql.LevenbergMarquardt()
         end_criteria = ql.EndCriteria(250, 200, 1e-7, 1e-7, 1e-7)
-        lower = ql.Array(5, 1e-9)
-        upper = ql.Array(5, 1.0)
-        lower[4] = -1.0
-        constraint = ql.NonhomogeneousBoundaryConstraint(lower, upper)
+        if 'constraint' in self._model_dict:
+	    constraint = self._model_dict['constraint']
+	else:
+	    constraint = ql.NoConstraint()
         
         for i, date in enumerate(dates):
             self.set_date(date)
@@ -1066,7 +1066,8 @@ hullwhite_analytic = {'name' : 'Hull-White (analytic formulae)',
                      'engine' : ql.JamshidianSwaptionEngine,
                      'transformation' : np.log, 
                      'inverse_transformation' : np.exp,
-                     'sampler': random_normal_draw}
+                     'sampler': random_normal_draw,
+		     'constraint': ql.PositiveConstraint()}
 
 def g2_transformation(x):
     if isinstance(x, pd.DataFrame):
@@ -1112,13 +1113,19 @@ def g2_method_local():
     constraint = ql.NonhomogeneousBoundaryConstraint(lower, upper)
     return (method, criteria, constraint)
 
+g2_lower = ql.Array(5, 1e-9)
+g2_upper = ql.Array(5, 1.0)
+g2_lower[4] = -1.0
+g2_constraint = ql.NonhomogeneousBoundaryConstraint(g2_lower, g2_upper)
+
 g2 = {'name' : 'G2++',
       'model' : ql.G2, 
       'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
       'method': g2_method(),
-      'sampler': random_normal_draw}
+      'sampler': random_normal_draw,
+      'constraint': g2_constraint}
 
 g2_local = {'name' : 'G2++_local',
       'model' : ql.G2, 
@@ -1126,7 +1133,8 @@ g2_local = {'name' : 'G2++_local',
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
       'method': g2_method_local(),
-      'sampler': random_normal_draw}
+      'sampler': random_normal_draw,
+      'constraint': g2_constraint}
 
 g2_vae = {'name' : 'G2++',
       'model' : ql.G2, 
@@ -1135,7 +1143,8 @@ g2_vae = {'name' : 'G2++',
       'inverse_transformation' : g2_inverse_transformation,
       'method': g2_method(),
       'sampler': vae.sample_from_generator,
-      'file_name': 'g2pp_vae'}
+      'file_name': 'g2pp_vae',
+      'constraint': g2_constraint}
 
 def get_swaptiongen(modelMap):
     index = ql.GBPLibor(ql.Period(6, ql.Months))
