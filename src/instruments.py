@@ -6,6 +6,7 @@
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 # FOR A PARTICULAR PURPOSE.  See the license for more details.
 from __future__ import print_function
+from six import string_types
 
 import string
 import data_utils as du
@@ -824,9 +825,18 @@ class SwaptionGen (du.TimeSeriesData):
         method = ql.LevenbergMarquardt()
         end_criteria = ql.EndCriteria(250, 200, 1e-7, 1e-7, 1e-7)
         if 'constraint' in self._model_dict:
-	    constraint = self._model_dict['constraint']
-	else:
-	    constraint = ql.NoConstraint()
+            if isinstance(self._model_dict['constraint'], string_types):
+                if self._model_dict['constraint'].lower() == 'positive':
+                    constraint = ql.PositiveConstraint();
+                else:
+                    constraint = ql.NoConstraint()
+            else:
+                constraint_dict = self._model_dict['constraint']
+                g2_lower = ql.Array(constraint_dict['lower'])
+                g2_upper = ql.Array(constraint_dict['upper'])
+                constraint = ql.NonhomogeneousBoundaryConstraint(g2_lower, g2_upper)
+        else:
+            constraint = ql.NoConstraint()
         
         for i, date in enumerate(dates):
             self.set_date(date)
@@ -1067,7 +1077,7 @@ hullwhite_analytic = {'name' : 'Hull-White (analytic formulae)',
                      'transformation' : np.log, 
                      'inverse_transformation' : np.exp,
                      'sampler': random_normal_draw,
-		     'constraint': ql.PositiveConstraint()}
+		     'constraint': 'positive'}
 
 def g2_transformation(x):
     if isinstance(x, pd.DataFrame):
@@ -1113,10 +1123,10 @@ def g2_method_local():
     constraint = ql.NonhomogeneousBoundaryConstraint(lower, upper)
     return (method, criteria, constraint)
 
-g2_lower = ql.Array(5, 1e-9)
-g2_upper = ql.Array(5, 1.0)
-g2_lower[4] = -1.0
-g2_constraint = ql.NonhomogeneousBoundaryConstraint(g2_lower, g2_upper)
+g2_lower = [1e-9]*5
+g2_upper = [1.0]*5
+g2_lower[-1] = -1.0
+g2_constraint = {'lower': g2_lower, 'upper': g2_upper}
 
 g2 = {'name' : 'G2++',
       'model' : ql.G2, 
