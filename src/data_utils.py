@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.dates import AutoDateLocator, DateFormatter
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
@@ -102,10 +103,10 @@ class TimeSeriesData(object):
         fd = self._data.loc[fr.name[0]].index
         if hasattr(fd, 'levels'):
             self._levels = fd.levels
-            self._axisSize = tuple( [len(x) for x in self._levels] )
+            self._axis_shape = tuple( [len(x) for x in self._levels] )
         else:
             self._levels = [fd]
-            self._axisSize = ( len(fd), )
+            self._axis_shape = ( len(fd), )
         self._dates = self._data.index.levels[0]
         self._pipeline = None
         
@@ -114,7 +115,7 @@ class TimeSeriesData(object):
 
     def __getimpl(self, date):
         data = self._data.loc[date].as_matrix()
-        data.shape = self._axisSize
+        data.shape = self._axis_shape
         return data
     
     def axis(self, i):
@@ -132,7 +133,7 @@ class TimeSeriesData(object):
         else:
             dates = self._data.index.levels[0]
         nbrDates = len(dates)
-        mat = np.zeros((nbrDates,) + self._axisSize)
+        mat = np.zeros((nbrDates,) + self._axis_shape)
         for iDate in range(nbrDates):
             mat[iDate] = self.__getimpl(dates[iDate])
         
@@ -164,12 +165,12 @@ def plot_data(times, data, labels=None, figsize=(10, 7.5), frame_lines=False,
               interval_multiples=True, colors=None, title=None,
               legend_fontsize=None, legend_color=almost_black,
               title_fontsize=None, title_color=almost_black,
-              xlabel=None, ylabel=None, 
+              xlabel=None, ylabel=None, xmin=0, xmax=None,
               xlabel_color=almost_black, ylabel_color=almost_black,
               xlabel_fontsize=14, ylabel_fontsize=14, 
               xtick_fontsize=14, ytick_fontsize=14,
               xtick_color=almost_black, ytick_color=almost_black,
-              out_of_sample=None):
+              out_of_sample=None, ytick_range=None, xtick_labels=None):
     # Taken from 
     # http://www.randalolson.com/2014/06/28/how-to-make-beautiful-data-visualizations-in-python-with-matplotlib/
     # and
@@ -188,7 +189,7 @@ def plot_data(times, data, labels=None, figsize=(10, 7.5), frame_lines=False,
     if colors is None:
         if data.shape[1] <= 2:
             colors = ('#ef8a62', '#67a9cf')
-        if data.shape[1] <= 10:
+        elif data.shape[1] <= 10:
             colors = tableau10mid
         else:
             colors = tableau20
@@ -209,13 +210,18 @@ def plot_data(times, data, labels=None, figsize=(10, 7.5), frame_lines=False,
 
     #Set y ticks and limits
     data[np.isinf(data)] = np.nan
-    yindex = ~np.isnan(data)
-    ymin = np.min(data[yindex])
-    ymin -= np.abs(ymin)*0.05
-    ymax = np.max(data[yindex])
-    ymax += np.abs(ymax)*0.05
-    ystep = (ymax-ymin)/10.
-    ytick_range = np.arange(ymin+ystep, ymax, ystep)
+    
+    if ytick_range is None:
+        yindex = ~np.isnan(data)
+        ymin = np.min(data[yindex])
+        ymin -= np.abs(ymin)*0.05
+        ymax = np.max(data[yindex])
+        ymax += np.abs(ymax)*0.05
+        ystep = (ymax-ymin)/10.
+        ytick_range = np.arange(ymin+ystep, ymax, ystep)
+    else:
+        ymin = ytick_range[0]
+        ymax = ytick_range[-1]
     plt.ylim(ymin, ymax)
     if yticks_format is None:
         plt.yticks(ytick_range, fontsize=ytick_fontsize)
@@ -229,27 +235,46 @@ def plot_data(times, data, labels=None, figsize=(10, 7.5), frame_lines=False,
         ax.yaxis.label.set_color(ylabel_color)
         
     #Set x ticks and limits
-    if isinstance(times, np.ndarray) and times.dtype.type == np.datetime64:
-        locator = AutoDateLocator(minticks=min_x_ticks, maxticks=max_x_ticks,
-                                  interval_multiples=interval_multiples)
-        formatter = DateFormatter('%d-%m-%Y')        
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(formatter)
-        ax.autoscale_view()
-        xtick_range = times
-        xmin = times[0]
-        xmax = times[-1]
-        delta = xmax - xmin
-        xmin = xmin - delta*0.02
-        xmax = xmax + delta*0.02
-        
+    if xmax is None or xmin is None:
+        if isinstance(times, np.ndarray) and times.dtype.type == np.datetime64:
+            locator = AutoDateLocator(minticks=min_x_ticks, maxticks=max_x_ticks,
+                                      interval_multiples=interval_multiples)
+            formatter = DateFormatter('%d-%m-%Y')        
+            ax.xaxis.set_major_locator(locator)
+            ax.xaxis.set_major_formatter(formatter)
+            ax.autoscale_view()
+            xtick_range = times
+            xmin = times[0]
+            xmax = times[-1]
+            delta = xmax - xmin
+            xmin = xmin - delta*0.02
+            xmax = xmax + delta*0.02
+            
+        else:
+            #xmin = 0
+            #xmax = data.shape[0]+1
+            
+            xmin = times[0]
+            xmax = times[-1]
+            xmin -= np.abs(xmin)*0.02
+            xmax += np.abs(xmax)*0.02
+            xtick_range = [xmin, xmax]
     else:
-        xmin = 0
-        xmax = data.shape[0]+1
-        xtick_range = range(xmin, xmax)
-        
-    plt.xlim(xmin, xmax)        
+        xtick_range = [xmin, xmax]    
+    
+    if xtick_labels is not None:
+        def format_fn(tick_val, tick_pos):
+            print((int(tick_val), int(tick_val) in times))
+            if int(tick_val) in times:
+                return xtick_labels[int(tick_val)]
+            else:
+                return ''
+        ax.xaxis.set_major_formatter(FuncFormatter(format_fn))
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    
+    plt.xlim(xmin, xmax)
     plt.xticks(fontsize=xtick_fontsize)
+        
     ax.tick_params(axis='x', colors=xtick_color)
     if xlabel is not None:
         plt.xlabel(xlabel, fontsize=xlabel_fontsize)

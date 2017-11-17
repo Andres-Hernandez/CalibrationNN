@@ -6,6 +6,7 @@
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 # FOR A PARTICULAR PURPOSE.  See the license for more details.
 from __future__ import print_function
+from six import string_types
 
 import string
 import data_utils as du
@@ -298,17 +299,17 @@ class SwaptionGen (du.TimeSeriesData):
         nb_swo_params = len(self._default_params)
         columns_orig = ['OrigParam%d' % x for x in range(nb_swo_params)]
         columns_hist = ['HistParam%d' % x for x in range(nb_swo_params)]
-        df_model = pd.get_store(du.h5file)[self.key_model]
+        df_model = du.from_hdf5(self.key_model, du.h5file)
         #Pick the best of the two
         swo_param_history_orig = df_model.loc[dates][columns_orig]
         swo_param_history_hist = df_model.loc[dates][columns_hist]
-        orig_vs_hist = df_model.loc[dates]['orig_objective'].values < df_model.loc[dates]['HistObjective'].values
+        orig_vs_hist = df_model.loc[dates]['OrigObjective'].values < df_model.loc[dates]['HistObjective'].values
         swo_param_history = swo_param_history_orig.copy(deep=True)
         swo_param_history[~orig_vs_hist] = swo_param_history_hist[~orig_vs_hist]
         
         #Get history of errors
         if with_error:
-            df_error = pd.get_store(du.h5file)[self.key_error]
+            df_error = du.from_hdf5(self.key_error, du.h5file)
             swo_error_history = df_error.loc[dates]
         else:
             swo_error_history = None
@@ -401,18 +402,17 @@ class SwaptionGen (du.TimeSeriesData):
             rows_model.fill(np.nan)
             rows_error = np.zeros((len(self._dates), nb_instruments))
         else:
-            with pd.get_store(du.h5file) as store:
-                df_model = store[self.key_model]
-                if len(df_model.columns) != len(columns) or \
-                        len(df_model.index) != len(self._dates):
-                    raise RuntimeError("Incompatible file")
-                rows_model = df_model.values
+            df_model = du.from_hdf5(self.key_model, du.h5file)
+            if len(df_model.columns) != len(columns) or \
+                    len(df_model.index) != len(self._dates):
+                raise RuntimeError("Incompatible file")
+            rows_model = df_model.values
                 
-                df_error = store[self.key_error]
-                if len(df_error.columns) != nb_instruments or \
-                        len(df_error.index) != len(self._dates):
-                    raise RuntimeError("Incompatible file")
-                rows_error = df_error.values
+            df_error = du.from_hdf5(self.key_error, du.h5file)
+            if len(df_error.columns) != nb_instruments or \
+                    len(df_error.index) != len(self._dates):
+                raise RuntimeError("Incompatible file")
+            rows_error = df_error.values
 
         header = self.ok_format % ('maturity','length','volatility','implied','error')
         dblrule = '=' * len(header)        
@@ -439,14 +439,12 @@ class SwaptionGen (du.TimeSeriesData):
             prev_params = self.model.params()
 
         df_model = pd.DataFrame(rows_model, index=self._dates, columns = columns)
+        du.store_hdf5(du.h5file, self.key_model, df_model)
         df_error = pd.DataFrame(rows_error, index=self._dates)
+        du.store_hdf5(du.h5file, self.key_error, df_error)
         
-        with pd.get_store(du.h5file) as store:
-            store[self.key_model] = df_model
-            store[self.key_error] = df_error
 
-
-    def __errors(self):
+    def _errors(self):
         total_error = 0.0
         with_exception = 0
         errors = np.zeros((1, len(self.helpers)))
@@ -489,7 +487,7 @@ class SwaptionGen (du.TimeSeriesData):
             print('Parameters   : %s ' % self.model.params() )
             print('Objective    : %s ' % orig_objective)
 
-            orig_mean_error, errors = self.__errors()
+            orig_mean_error, errors = self._errors()
             print('Average error: %s ' % format_vol(orig_mean_error,4))
             print(dblrule)
         except RuntimeError as e:
@@ -519,11 +517,11 @@ class SwaptionGen (du.TimeSeriesData):
             self.model.setParams(args[0])
             try:
                 hist_objective_prior = self.model.value(self.model.params(), self.helpers)
-                hist_mean_error_prior, _ = self.__errors()
+                hist_mean_error_prior, _ = self._errors()
                 self.model.calibrate(self.helpers, self.method, 
                                      self.end_criteria, self.constraint)
                 hist_objective = self.model.value(self.model.params(), self.helpers)
-                hist_mean_error, errors_hist = self.__errors()
+                hist_mean_error, errors_hist = self._errors()
                 if hist_objective < orig_objective:
                     errors = errors_hist
             except RuntimeError:
@@ -656,10 +654,6 @@ class SwaptionGen (du.TimeSeriesData):
                 self._term_structure.linkTo(curve)
                 self.model.setParams(ql.Array(y[row, :].tolist()))
                 nb_nan_swo = 0
-                if row == nb_samples-1:
-                    NPV = self.helpers[0].modelValue()
-                    vola = self.helpers[0].impliedVolatility(NPV, 1.0e-6, 1000, 0.0001, 2.50)
-                    print("%s, %s" % (NPV, vola))
                 for swaption in range(nb_instruments):
                     try:
                         NPV = self.helpers[swaption].modelValue()
@@ -709,20 +703,18 @@ class SwaptionGen (du.TimeSeriesData):
         self._term_structure.linkTo(curve)
         qlParams = ql.Array(params.tolist())
         self.model.setParams(qlParams)
-        return self.__errors()
+        return self._errors()
 
 
     def errors(self, predictive_model, date):
-        with pd.get_store(du.h5file) as store:
-            df_error = store[self.key_error]
-            orig_errors = df_error.loc[date]
-            store.close()
+        df_error = du.from_hdf5(self.key_error, du.h5file)
+        orig_errors = df_error.loc[date]
         
         self.refdate = ql.Date(1, 1, 1901)
         self.set_date(date)
         params = predictive_model.predict((self.values, self._ircurve.values))
         self.model.setParams(ql.Array(params.tolist()[0]))
-        _, errors = self.__errors()
+        _, errors = self._errors()
         return (orig_errors, errors)
 
 
@@ -737,7 +729,7 @@ class SwaptionGen (du.TimeSeriesData):
             self.set_date(date)
             params = predictive_model.predict((self.values, self._ircurve.values))
             self.model.setParams(ql.Array(params.tolist()[0]))
-            _, errors_mat[i, :] = self.__errors()
+            _, errors_mat[i, :] = self._errors()
     
         return errors_mat
     
@@ -750,7 +742,7 @@ class SwaptionGen (du.TimeSeriesData):
             self.set_date(date)
             params = predictive_model.predict((self.values, self._ircurve.values))
             self.model.setParams(ql.Array(params.tolist()[0]))
-            volas_predict[i], _ = self.__errors()
+            volas_predict[i], _ = self._errors()
             try:
                 objective_predict[i] = self.model.value(self.model.params(), self.helpers)
             except RuntimeError:
@@ -760,16 +752,14 @@ class SwaptionGen (du.TimeSeriesData):
                 
         
     def objective_shape(self, predictive_model, date, nb_samples_x=100, nb_samples_y=100):
-        store = pd.get_store(du.h5file)
-        df = store[self.key_model]
-        store.close()
+        df = du.from_hdf5(self.key_model, du.h5file)
         self.set_date(date)
         
         params_predict = predictive_model.predict((self.values, self._ircurve.values))
         params_predict = params_predict.reshape((params_predict.shape[1],))
         self.model.setParams(ql.Array(params_predict.tolist()))
         print("Predict value = %f" % self.model.value(self.model.params(), self.helpers))
-        orig_objective = df.ix[date, 'orig_objective']
+        orig_objective = df.ix[date, 'OrigObjective']
         hist_objective = df.ix[date, 'HistObjective']
         if orig_objective < hist_objective:
             name = 'OrigParam'
@@ -823,85 +813,101 @@ class SwaptionGen (du.TimeSeriesData):
         
         
         
-    def compare_history(self, predictive_model, dates=None, plot_results=False):
-        store = pd.get_store(du.h5file)
-        df = store[self.key_model]
-        store.close()
+    def compare_history(self, predictive_model, dates=None, plot_results=False,
+                        local_optim=False):
+        nb_dims = np.array(self._default_params).shape[0]
+        df = du.from_hdf5(self.key_model, du.h5file)
         self.refdate = ql.Date(1, 1, 1901)
-        vals = np.zeros((len(df.index),4))
-        values = np.zeros((len(df.index),13))
+        values = np.zeros((len(df.index),8+nb_dims))
         if dates is None:
             dates = self._dates
         
-        
-        method = ql.LevenbergMarquardt()
-        end_criteria = ql.EndCriteria(250, 200, 1e-7, 1e-7, 1e-7)
-        lower = ql.Array(5, 1e-9)
-        upper = ql.Array(5, 1.0)
-        lower[4] = -1.0
-        constraint = ql.NonhomogeneousBoundaryConstraint(lower, upper)
-        
+        if local_optim:
+            vals = np.zeros((len(df.index),4))
+            method = ql.LevenbergMarquardt()
+            end_criteria = ql.EndCriteria(250, 200, 1e-7, 1e-7, 1e-7)
+            if 'constraint' in self._model_dict:
+                if isinstance(self._model_dict['constraint'], string_types):
+                    if self._model_dict['constraint'].lower() == 'positive':
+                        constraint = ql.PositiveConstraint();
+                    else:
+                        constraint = ql.NoConstraint()
+                else:
+                    constraint_dict = self._model_dict['constraint']
+                    g2_lower = ql.Array(constraint_dict['lower'])
+                    g2_upper = ql.Array(constraint_dict['upper'])
+                    constraint = ql.NonhomogeneousBoundaryConstraint(g2_lower, g2_upper)
+            else:
+                constraint = ql.NoConstraint()
+        else:
+            vals = np.zeros((len(df.index),2))
+            
         for i, date in enumerate(dates):
             self.set_date(date)
             params = predictive_model.predict((self.values, self._ircurve.values))
             self.model.setParams(ql.Array(params.tolist()[0]))
-            meanErrorPrior, _ = self.__errors()
+            mean_error_prior, _ = self._errors()
             try:
-                objectivePrior = self.model.value(self.model.params(), self.helpers)
+                objective_prior = self.model.value(self.model.params(), self.helpers)
             except RuntimeError:
-                objectivePrior = np.nan
+                objective_prior = np.nan
+                
+            if local_optim:
+                self.model.calibrate(self.helpers, method, 
+                                     end_criteria, constraint)  
+                mean_error_after, _ = self._errors()
+                params_cal = self.model.params()
+                try:
+                    objective_after = self.model.value(self.model.params(), self.helpers)
+                except RuntimeError:
+                    objective_after = np.nan
+                
+            else:
+                mean_error_after = np.nan
+                objective_after = np.nan
 
-            self.model.calibrate(self.helpers, method, 
-                                 end_criteria, constraint)  
-            meanErrorAfter, _ = self.__errors()
-            paramsC = self.model.params()
-            try:
-                objectiveAfter = self.model.value(self.model.params(), self.helpers)
-            except RuntimeError:
-                objectiveAfter = np.nan
-
-            orig_mean_error = df.ix[date, 'orig_mean_error']
+            orig_mean_error = df.ix[date, 'OrigMeanError']
             hist_mean_error = df.ix[date, 'HistMeanError']
-            orig_objective = df.ix[date, 'orig_objective']
+            orig_objective = df.ix[date, 'OrigObjective']
             hist_objective = df.ix[date, 'HistObjective']
                 
-
             values[i, 0] = orig_mean_error
             values[i, 1] = hist_mean_error
-            values[i, 2] = meanErrorPrior
+            values[i, 2] = mean_error_prior
             values[i, 3] = orig_objective
             values[i, 4] = hist_objective
-            values[i, 5] = objectivePrior
-            values[i, 6] = meanErrorAfter
-            values[i, 7] = objectiveAfter
+            values[i, 5] = objective_prior
+            values[i, 6] = mean_error_after
+            values[i, 7] = objective_after
             if orig_objective < hist_objective:
-                values[i, 8] = df.ix[date, 'OrigParam0']
-                values[i, 9] = df.ix[date, 'OrigParam1']
-                values[i, 10] = df.ix[date, 'OrigParam2']
-                values[i, 11] = df.ix[date, 'OrigParam3']
-                values[i, 12] = df.ix[date, 'OrigParam4']
+                param_name = 'OrigParam%d'
             else:
-                values[i, 8] = df.ix[date, 'HistParam0']
-                values[i, 9] = df.ix[date, 'HistParam1']
-                values[i, 10] = df.ix[date, 'HistParam2']
-                values[i, 11] = df.ix[date, 'HistParam3']
-                values[i, 12] = df.ix[date, 'HistParam4']
+                param_name = 'HistParam%d'
+                
+            for i in range(nb_dims):
+                values[i, 8+i] = df.ix[date, param_name % i]
 
             print('Date=%s' % date)
-            print('Vola: Orig=%s Hist=%s ModelPrior=%s ModelAfter=%s' % (orig_mean_error, hist_mean_error, meanErrorPrior, meanErrorAfter))
-            print('NPV:  Orig=%s Hist=%s Model=%s ModelAfter=%s' % (orig_objective, hist_objective, objectivePrior, objectiveAfter))
-            print('Param0: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 8], params[0][0], paramsC[0]))
-            print('Param1: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 9], params[0][1], paramsC[1]))
-            print('Param2: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 10], params[0][2], paramsC[2]))
-            print('Param3: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 11], params[0][3], paramsC[3]))
-            print('Param4: Cal:%s , Model:%s, Cal-Mod:%s' % (values[i, 12], params[0][4], paramsC[4]))
-            
-            vals[i, 0] = (meanErrorPrior - orig_mean_error)/orig_mean_error*100.0
-            vals[i, 1] = (meanErrorPrior - hist_mean_error)/hist_mean_error*100.0
-            vals[i, 2] = (meanErrorAfter - orig_mean_error)/orig_mean_error*100.0
-            vals[i, 3] = (meanErrorAfter - hist_mean_error)/hist_mean_error*100.0
-            
-            print('      impO=%s impH=%s impAfterO=%s impAfterH=%s' % (vals[i, 0], vals[i, 1], vals[i,2], vals[i, 3]))
+            if local_optim:
+                print('Vola: Orig=%s Hist=%s Model=%s ModelAfter=%s' % (orig_mean_error, hist_mean_error, mean_error_prior, mean_error_after))
+                print('NPV:  Orig=%s Hist=%s Model=%s ModelAfter=%s' % (orig_objective, hist_objective, objective_prior, objective_after))
+                for i in range(nb_dims):
+                    print('Param%d: Cal:%s , Model:%s, Cal-Mod:%s' % (i, values[i, 8+i], params[0][i], params_cal[i]))
+            else:
+                print('Vola: Orig=%s Hist=%s Model=%s' % (orig_mean_error, hist_mean_error, mean_error_prior))
+                print('NPV:  Orig=%s Hist=%s Model=%s' % (orig_objective, hist_objective, objective_prior))
+            try:
+                vals[i, 0] = (mean_error_prior - orig_mean_error)/orig_mean_error*100.0
+                vals[i, 1] = (mean_error_prior - hist_mean_error)/hist_mean_error*100.0
+            except RuntimeError:
+                print("(%f, %f, %f)" % (mean_error_prior, orig_mean_error, orig_mean_error))
+                print("(%f, %f, %f)" % (mean_error_prior, hist_mean_error, hist_mean_error))
+            if local_optim:
+                vals[i, 2] = (mean_error_after - orig_mean_error)/orig_mean_error*100.0
+                vals[i, 3] = (mean_error_after - hist_mean_error)/hist_mean_error*100.0
+                print('      impO=%s impH=%s impAfterO=%s impAfterH=%s' % (vals[i, 0], vals[i, 1], vals[i,2], vals[i, 3]))
+            else:
+                print('      impO=%s impH=%s' % (vals[i, 0], vals[i, 1]))
         
         if plot_results:
             r = range(vals.shape[0])
@@ -1052,7 +1058,7 @@ def random_normal_draw(history, nb_samples, **kwargs):
     
     #Draw correlated random variables
     #draws are generated transposed for convenience of the dot operation
-    draws = np.random.standard_normal((history.shape(-1), nb_samples))
+    draws = np.random.standard_normal((history.shape[-1], nb_samples))
     draws = np.dot(sqrt_cov, draws)
     draws = np.transpose(draws)
     return scaler.inverse_transform(draws)
@@ -1079,7 +1085,8 @@ hullwhite_analytic = {'name' : 'Hull-White (analytic formulae)',
                      'engine' : ql.JamshidianSwaptionEngine,
                      'transformation' : np.log, 
                      'inverse_transformation' : np.exp,
-                     'sampler': random_normal_draw}
+                     'sampler': random_normal_draw,
+		     'constraint': 'positive'}
 
 def g2_transformation(x):
     if isinstance(x, pd.DataFrame):
@@ -1125,13 +1132,19 @@ def g2_method_local():
     constraint = ql.NonhomogeneousBoundaryConstraint(lower, upper)
     return (method, criteria, constraint)
 
+g2_lower = [1e-9]*5
+g2_upper = [1.0]*5
+g2_lower[-1] = -1.0
+g2_constraint = {'lower': g2_lower, 'upper': g2_upper}
+
 g2 = {'name' : 'G2++',
       'model' : ql.G2, 
       'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
       'method': g2_method(),
-      'sampler': random_normal_draw}
+      'sampler': random_normal_draw,
+      'constraint': g2_constraint}
 
 g2_local = {'name' : 'G2++_local',
       'model' : ql.G2, 
@@ -1139,7 +1152,8 @@ g2_local = {'name' : 'G2++_local',
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
       'method': g2_method_local(),
-      'sampler': random_normal_draw}
+      'sampler': random_normal_draw,
+      'constraint': g2_constraint}
 
 g2_vae = {'name' : 'G2++',
       'model' : ql.G2, 
@@ -1148,7 +1162,8 @@ g2_vae = {'name' : 'G2++',
       'inverse_transformation' : g2_inverse_transformation,
       'method': g2_method(),
       'sampler': vae.sample_from_generator,
-      'file_name': 'g2pp_vae'}
+      'file_name': 'g2pp_vae',
+      'constraint': g2_constraint}
 
 def get_swaptiongen(modelMap):
     index = ql.GBPLibor(ql.Period(6, ql.Months))
