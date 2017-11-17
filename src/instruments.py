@@ -442,8 +442,8 @@ class SwaptionGen (du.TimeSeriesData):
         du.store_hdf5(du.h5file, self.key_model, df_model)
         df_error = pd.DataFrame(rows_error, index=self._dates)
         du.store_hdf5(du.h5file, self.key_error, df_error)
-        
 
+		
     def _errors(self):
         total_error = 0.0
         with_exception = 0
@@ -811,8 +811,7 @@ class SwaptionGen (du.TimeSeriesData):
 
         return (objectives.reshape(sh), lim_alpha, lim_beta)
         
-        
-        
+
     def compare_history(self, predictive_model, dates=None, plot_results=False,
                         local_optim=False):
         nb_dims = np.array(self._default_params).shape[0]
@@ -841,7 +840,7 @@ class SwaptionGen (du.TimeSeriesData):
                 constraint = ql.NoConstraint()
         else:
             vals = np.zeros((len(df.index),2))
-            
+
         for i, date in enumerate(dates):
             self.set_date(date)
             params = predictive_model.predict((self.values, self._ircurve.values))

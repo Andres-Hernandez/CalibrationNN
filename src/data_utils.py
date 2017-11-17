@@ -85,7 +85,9 @@ def csv_to_hdf5(file_name, key, hdf5file_name):
 
 def from_hdf5(key, file_name=h5file):
     with pd.HDFStore(file_name) as store:
-        return store[key]
+        data =  store[key]
+        store.close()
+    return data
 
         
 def tofile(file_name, model):
