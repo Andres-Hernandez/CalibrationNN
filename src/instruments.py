@@ -71,8 +71,6 @@ class IRCurve (du.TimeSeriesData):
             self.pca()
         refdate = ql.Date(date.day, date.month, date.year)  
         data = self._pipeline.inverse_transform(vals)
-        #if len(data.shape) == 1:
-        #    data = data.reshape((-1, 1))
         return (data, self.__curveimpl(refdate, data))
 
 
