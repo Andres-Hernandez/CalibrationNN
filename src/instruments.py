@@ -9,6 +9,7 @@ from __future__ import print_function
 from six import string_types
 
 import string
+from copy import deepcopy
 import data_utils as du
 import pandas as pd
 import numpy as np
@@ -71,8 +72,6 @@ class IRCurve (du.TimeSeriesData):
             self.pca()
         refdate = ql.Date(date.day, date.month, date.year)  
         data = self._pipeline.inverse_transform(vals)
-        #if len(data.shape) == 1:
-        #    data = data.reshape((-1, 1))
         return (data, self.__curveimpl(refdate, data))
 
 
@@ -215,14 +214,7 @@ class SwaptionGen (du.TimeSeriesData):
         self.__create_helpers()
 
         #Standard calibration nick-nacks
-        if 'method' in self._model_dict:
-            self.method = self._model_dict['method'][0]
-            self.end_criteria = self._model_dict['method'][1]
-            self.constraint = self._model_dict['method'][2]
-        else:
-            self.method = ql.LevenbergMarquardt()
-            self.end_criteria = ql.EndCriteria(1000, 250, 1e-7, 1e-7, 1e-7)
-            self.constraint = ql.PositiveConstraint()
+        self._init_calibration_method()
             
         self._default_params = self.model.params()        
         self._sampler = self._model_dict['sampler']
@@ -243,6 +235,37 @@ class SwaptionGen (du.TimeSeriesData):
         self.err_format = '%2s |%12s |'
         self.values = None
 
+    def _init_calibration_method(self):
+        #Standard calibration nick-nacks
+        if 'method' in self._model_dict:
+            method = self._model_dict['method']
+            if callable(method):
+                method = method()
+                
+            self.method = method[0]
+            self.end_criteria = method[1]
+            self.constraint = method[2]
+        else:
+            self.method = ql.LevenbergMarquardt()
+            self.end_criteria = ql.EndCriteria(1000, 250, 1e-7, 1e-7, 1e-7)
+            self.constraint = ql.PositiveConstraint()
+        
+    def __getstate__(self):
+        method = self.method if 'method' in self.__dict__ else None
+        end_criteria = self.end_criteria if 'end_criteria' in self.__dict__ else None
+        constraint = self.constraint if 'constraint' in self.__dict__ else None
+        del self.__dict__['method']
+        del self.__dict__['end_criteria']
+        del self.__dict__['constraint']
+        d = deepcopy(self.__dict__)
+        self.method = method
+        self.end_criteria = end_criteria
+        self.constraint = constraint
+        return d
+    
+    def __setstate__(self, d):
+        self.__dict__ = d
+        self._init_calibration_method()
         
     def set_date(self, date):
         #Set Reference Date
@@ -1143,7 +1166,7 @@ g2 = {'name' : 'G2++',
       'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
-      'method': g2_method(),
+      'method': g2_method,
       'sampler': random_normal_draw,
       'constraint': g2_constraint}
 
@@ -1152,7 +1175,7 @@ g2_local = {'name' : 'G2++_local',
       'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
-      'method': g2_method_local(),
+      'method': g2_method_local,
       'sampler': random_normal_draw,
       'constraint': g2_constraint}
 
@@ -1161,7 +1184,7 @@ g2_vae = {'name' : 'G2++',
       'engine' : lambda model, _: ql.G2SwaptionEngine(model, 6.0, 16),
       'transformation' : g2_transformation,
       'inverse_transformation' : g2_inverse_transformation,
-      'method': g2_method(),
+      'method': g2_method,
       'sampler': vae.sample_from_generator,
       'file_name': 'g2pp_vae',
       'constraint': g2_constraint}
